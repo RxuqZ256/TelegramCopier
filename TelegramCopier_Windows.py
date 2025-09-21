@@ -1167,8 +1167,8 @@ class TradingGUI:
         self.notebook = ttk.Notebook(self.main_frame)
         self.notebook.pack(fill='both', expand=True)
 
-        self.create_chat_management_tab()
-        self.create_trading_tab()
+        self.create_chat_overview_tab()
+        self.create_bot_settings_tab()
         self.create_statistics_tab()
 
         # Status Bar
@@ -1190,14 +1190,14 @@ class TradingGUI:
         self.start_button.pack(side='left', padx=(0, 8))
         ttk.Button(button_frame, text="■ Bot stoppen", command=self.stop_bot).pack(side='left')
 
-    def create_chat_management_tab(self):
-        """Chat-Management Tab"""
+    def create_chat_overview_tab(self):
+        """Tab für die Chat-Übersicht"""
         chat_frame = ttk.Frame(self.notebook, padding=(24, 24, 24, 20), style='Main.TFrame')
-        self.notebook.add(chat_frame, text="Chat Management")
+        self.notebook.add(chat_frame, text="Chats")
 
         header = ttk.Frame(chat_frame, style='Main.TFrame')
         header.pack(fill='x')
-        ttk.Label(header, text="Chat-Quellen", style='SectionTitle.TLabel').pack(side='left')
+        ttk.Label(header, text="Meine Chats", style='SectionTitle.TLabel').pack(side='left')
         self.chat_summary_label = ttk.Label(header, text="Keine Chats geladen", style='Info.TLabel')
         self.chat_summary_label.pack(side='right')
 
@@ -1288,18 +1288,18 @@ class TradingGUI:
             )
         ).pack(side='right')
 
-    def create_trading_tab(self):
-        """Trading Tab"""
-        trading_frame = ttk.Frame(self.notebook, padding=(24, 24, 24, 20), style='Main.TFrame')
-        self.notebook.add(trading_frame, text="Trading")
+    def create_bot_settings_tab(self):
+        """Tab für Bot-Einstellungen und Status"""
+        settings_tab = ttk.Frame(self.notebook, padding=(24, 24, 24, 20), style='Main.TFrame')
+        self.notebook.add(settings_tab, text="Bot Einstellungen")
 
-        header = ttk.Frame(trading_frame, style='Main.TFrame')
+        header = ttk.Frame(settings_tab, style='Main.TFrame')
         header.pack(fill='x')
-        ttk.Label(header, text="Trading-Steuerung", style='SectionTitle.TLabel').pack(side='left')
-        self.trade_status_label = ttk.Label(header, text="Demo aktiv", style='Info.TLabel')
+        ttk.Label(header, text="Bot-Status & Einstellungen", style='SectionTitle.TLabel').pack(side='left')
+        self.trade_status_label = ttk.Label(header, text="Demo-Modus aktiv", style='Info.TLabel')
         self.trade_status_label.pack(side='right')
 
-        settings_frame = ttk.Frame(trading_frame, style='Card.TFrame', padding=(20, 18))
+        settings_frame = ttk.Frame(settings_tab, style='Card.TFrame', padding=(20, 18))
         settings_frame.pack(fill='x', pady=(20, 16))
         settings_frame.columnconfigure((0, 1, 2), weight=1)
 
@@ -1312,7 +1312,7 @@ class TradingGUI:
             style='Switch.TCheckbutton'
         ).grid(row=0, column=0, sticky='w')
 
-        ttk.Label(settings_frame, text="Handelsmodus:", style='FieldLabel.TLabel').grid(row=0, column=1, sticky='w')
+        ttk.Label(settings_frame, text="Ausführungsmodus:", style='FieldLabel.TLabel').grid(row=0, column=1, sticky='w')
         self.execution_mode_var = tk.StringVar(value="Sofortausführung")
         ttk.Combobox(
             settings_frame,
@@ -1328,18 +1328,18 @@ class TradingGUI:
         )
         warning_label.grid(row=1, column=0, columnspan=3, sticky='w', pady=(14, 0))
 
-        toolbar = ttk.Frame(trading_frame, style='Toolbar.TFrame', padding=(16, 12))
+        toolbar = ttk.Frame(settings_tab, style='Toolbar.TFrame', padding=(16, 12))
         toolbar.pack(fill='x', pady=(0, 18))
-        ttk.Button(toolbar, text="📥 Neue Signale", style='Toolbar.TButton', command=self.load_chats).pack(side='left')
+        ttk.Button(toolbar, text="📥 Signale abrufen", style='Toolbar.TButton', command=self.load_chats).pack(side='left')
         ttk.Button(toolbar, text="🧹 Log leeren", style='Toolbar.TButton', command=self.clear_log).pack(side='left', padx=(10, 0))
-        ttk.Button(toolbar, text="📊 Statistiken", style='Toolbar.TButton', command=self.refresh_statistics).pack(side='left', padx=(10, 0))
+        ttk.Button(toolbar, text="📊 Statistiken aktualisieren", style='Toolbar.TButton', command=self.refresh_statistics).pack(side='left', padx=(10, 0))
 
-        metrics_frame = ttk.Frame(trading_frame, style='Main.TFrame')
+        metrics_frame = ttk.Frame(settings_tab, style='Main.TFrame')
         metrics_frame.pack(fill='x', pady=(0, 18))
         metrics_frame.columnconfigure((0, 1, 2), weight=1)
         for idx, (title, value) in enumerate([
-            ("Aktive Signale", "0"),
-            ("Offene Trades", "0"),
+            ("Aktive Chats", "0"),
+            ("Überwachte Signale", "0"),
             ("Heute synchronisiert", "0")
         ]):
             metric = ttk.Frame(metrics_frame, style='Metric.TFrame', padding=(16, 12))
@@ -1347,7 +1347,7 @@ class TradingGUI:
             ttk.Label(metric, text=title, style='MetricTitle.TLabel').pack(anchor='w')
             ttk.Label(metric, text=value, style='MetricValue.TLabel').pack(anchor='w', pady=(4, 0))
 
-        log_frame = ttk.LabelFrame(trading_frame, text="Live Trade Log", padding="16", style='Card.TLabelframe')
+        log_frame = ttk.LabelFrame(settings_tab, text="Live-Aktivitätsprotokoll", padding="16", style='Card.TLabelframe')
         log_frame.pack(fill='both', expand=True)
 
         self.log_text = tk.Text(
@@ -1371,13 +1371,13 @@ class TradingGUI:
         self.log_text.configure(yscrollcommand=log_scroll.set, padx=14, pady=12, spacing3=6)
 
     def create_statistics_tab(self):
-        """Statistiken Tab"""
+        """Tab für Statistiken des Kopierers"""
         stats_frame = ttk.Frame(self.notebook, padding=(24, 24, 24, 20), style='Main.TFrame')
-        self.notebook.add(stats_frame, text="Statistiken")
+        self.notebook.add(stats_frame, text="Kopierer Statistiken")
 
         header = ttk.Frame(stats_frame, style='Main.TFrame')
         header.pack(fill='x')
-        ttk.Label(header, text="Performance & Statistiken", style='SectionTitle.TLabel').pack(side='left')
+        ttk.Label(header, text="Performance des Kopierers", style='SectionTitle.TLabel').pack(side='left')
         self.statistics_hint = ttk.Label(header, text="Letzte Aktualisierung: –", style='Info.TLabel')
         self.statistics_hint.pack(side='right')
 
@@ -1587,7 +1587,7 @@ class TradingGUI:
         self.bot.demo_mode = self.demo_var.get()
         mode_text = "Demo-Modus" if self.bot.demo_mode else "LIVE-Modus"
         if hasattr(self, 'trade_status_label'):
-            status_text = "Demo aktiv" if self.bot.demo_mode else "LIVE aktiv"
+            status_text = "Demo-Modus aktiv" if self.bot.demo_mode else "LIVE-Modus aktiv"
             self.trade_status_label.config(text=status_text)
         self.log_message(f"Modus geändert: {mode_text}")
 
@@ -1694,7 +1694,7 @@ class TradingGUI:
         if hasattr(self, 'demo_var'):
             self.demo_var.set(demo_mode)
         if hasattr(self, 'trade_status_label'):
-            self.trade_status_label.config(text="Demo aktiv" if demo_mode else "LIVE aktiv")
+            self.trade_status_label.config(text="Demo-Modus aktiv" if demo_mode else "LIVE-Modus aktiv")
 
     def log_message(self, message):
         """Log-Nachricht in GUI anzeigen"""
