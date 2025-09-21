@@ -10,8 +10,9 @@ import json
 import queue
 import threading
 from concurrent.futures import Future
+from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Optional, Dict, List, Awaitable
 
@@ -402,6 +403,13 @@ class MultiChatTradingBot:
         self.demo_mode = True  # Immer mit Demo starten!
         self.pending_trade_updates: Dict[int, Dict] = {}
 
+        # Trading-Parameter (werden durch Konfiguration überschrieben)
+        self.default_lot_size: float = 0.01
+        self.max_spread_pips: float = 3.0
+        self.risk_percent: float = 2.0
+        self.max_trades_per_hour: int = 5
+        self._executed_trade_times: List[datetime] = []
+
         # Zugangsdaten anwenden (falls vorhanden)
         self.update_credentials(api_id, api_hash, phone, session_name=session_name)
 
@@ -450,6 +458,41 @@ class MultiChatTradingBot:
                 self.api_hash,
                 loop=self.loop
             )
+
+    def update_trading_settings(self, **settings):
+        """Trading-Parameter aktualisieren."""
+
+        if 'default_lot_size' in settings:
+            try:
+                lot = float(settings['default_lot_size'])
+            except (TypeError, ValueError):
+                pass
+            else:
+                self.default_lot_size = max(lot, 0.0)
+
+        if 'max_spread_pips' in settings:
+            try:
+                spread = float(settings['max_spread_pips'])
+            except (TypeError, ValueError):
+                pass
+            else:
+                self.max_spread_pips = max(spread, 0.0)
+
+        if 'risk_percent' in settings:
+            try:
+                risk = float(settings['risk_percent'])
+            except (TypeError, ValueError):
+                pass
+            else:
+                self.risk_percent = max(risk, 0.0)
+
+        if 'max_trades_per_hour' in settings:
+            try:
+                trades_per_hour = int(settings['max_trades_per_hour'])
+            except (TypeError, ValueError):
+                pass
+            else:
+                self.max_trades_per_hour = max(trades_per_hour, 0)
 
     async def ensure_connected(self) -> bool:
         """Stellt sicher, dass der Telegram-Client verbunden ist."""
@@ -677,9 +720,83 @@ class MultiChatTradingBot:
         except Exception as e:
             self.log(f"Fehler bei Nachrichtenverarbeitung: {e}", "ERROR")
 
+    def _cleanup_trade_history(self):
+        """Entfernt Trade-Zeitstempel, die älter als eine Stunde sind."""
+        cutoff = datetime.now() - timedelta(hours=1)
+        self._executed_trade_times = [
+            ts for ts in self._executed_trade_times
+            if ts >= cutoff
+        ]
+
+    def _can_execute_trade(self) -> bool:
+        """Prüft, ob das Trades-pro-Stunde-Limit erreicht ist."""
+        if self.max_trades_per_hour <= 0:
+            return True
+
+        self._cleanup_trade_history()
+        return len(self._executed_trade_times) < self.max_trades_per_hour
+
+    def _register_trade_execution(self):
+        """Vermerkt einen ausgeführten Trade."""
+        self._cleanup_trade_history()
+        self._executed_trade_times.append(datetime.now())
+
+    def get_current_spread(self, symbol: str) -> Optional[float]:
+        """Ermittelt den aktuellen Spread in Pips, sofern verfügbar."""
+        if not MT5_AVAILABLE:
+            return None
+
+        try:
+            symbol_info = mt5.symbol_info(symbol)
+            tick_info = mt5.symbol_info_tick(symbol)
+            if not symbol_info or not tick_info:
+                return None
+
+            point = getattr(symbol_info, 'point', 0.0) or 0.0
+            digits = getattr(symbol_info, 'digits', 0)
+            ask = getattr(tick_info, 'ask', None)
+            bid = getattr(tick_info, 'bid', None)
+
+            if ask is None or bid is None or point <= 0:
+                return None
+
+            raw_spread = ask - bid
+            pip_size = point * 10 if digits in (3, 5) else point
+            if pip_size <= 0:
+                return None
+
+            return raw_spread / pip_size
+        except Exception:
+            return None
+
     async def execute_signal(self, signal: Dict, chat_source: ChatSource, original_message: str):
         """Signal ausführen (Demo oder Live)"""
         try:
+            if not self._can_execute_trade():
+                self.log(
+                    (
+                        "Trade abgelehnt: Maximale Anzahl von Trades pro Stunde erreicht "
+                        f"({self.max_trades_per_hour})."
+                    ),
+                    "WARNING"
+                )
+                return None
+
+            current_spread = self.get_current_spread(signal['symbol'])
+            if (
+                self.max_spread_pips > 0
+                and current_spread is not None
+                and current_spread > self.max_spread_pips
+            ):
+                self.log(
+                    (
+                        f"Trade abgelehnt: Spread von {current_spread:.2f} Pips "
+                        f"überschreitet das Limit von {self.max_spread_pips:.2f} Pips."
+                    ),
+                    "WARNING"
+                )
+                return None
+
             if self.demo_mode or not MT5_AVAILABLE:
                 stop_loss_value = signal.get('stop_loss')
                 stop_loss = float(stop_loss_value) if stop_loss_value is not None else 0.0
@@ -700,7 +817,7 @@ class MultiChatTradingBot:
                     'symbol': signal['symbol'],
                     'direction': signal['action'],
                     'price': 1.0850 if 'EUR' in signal['symbol'] else 2660.00,
-                    'lot_size': 0.01,
+                    'lot_size': self.default_lot_size,
                     'stop_loss': stop_loss,
                     'take_profit': take_profit,
                     'take_profits': normalized_tps,
@@ -710,6 +827,7 @@ class MultiChatTradingBot:
 
                 # Trade zu Tracker hinzufügen
                 self.trade_tracker.add_trade(demo_result, chat_source, original_message)
+                self._register_trade_execution()
 
                 self.log(f"DEMO-Trade ausgeführt: {signal['action']} {signal['symbol']} von {chat_source.chat_name}")
 
@@ -998,12 +1116,42 @@ class TradingGUI:
             pass
         self._configure_styles()
 
+        # Konfiguration laden
+        self.config_manager = ConfigManager()
+        initial_config = config if config is not None else self.config_manager.load_config()
+        self.current_config = self._prepare_config(initial_config)
+
         # Bot-Instanz (setzt später Config/Setup)
         self.bot = MultiChatTradingBot(None, None, None)
         self.bot_starting = False
         self._auth_dialog_open = False
         self._last_auth_message: Optional[str] = None
         self._pending_auth_message: Optional[str] = None
+
+        # Trading-Variablen
+        trading_cfg = self.current_config.get('trading', {})
+        self.default_lot_size_var = tk.DoubleVar(
+            value=self._safe_float(trading_cfg.get('default_lot_size'), 0.01)
+        )
+        self.max_spread_pips_var = tk.DoubleVar(
+            value=self._safe_float(trading_cfg.get('max_spread_pips'), 3.0)
+        )
+        self.risk_percent_var = tk.DoubleVar(
+            value=self._safe_float(trading_cfg.get('risk_percent'), 2.0)
+        )
+        self.max_trades_per_hour_var = tk.IntVar(
+            value=self._safe_int(trading_cfg.get('max_trades_per_hour'), 5)
+        )
+
+        self._suppress_trading_var_update = False
+        self.trading_vars: Dict[str, tk.Variable] = {
+            'default_lot_size': self.default_lot_size_var,
+            'max_spread_pips': self.max_spread_pips_var,
+            'risk_percent': self.risk_percent_var,
+            'max_trades_per_hour': self.max_trades_per_hour_var
+        }
+        for name, var in self.trading_vars.items():
+            var.trace_add('write', lambda *args, setting=name: self._on_trading_setting_change(setting))
 
         # Buttons (werden in create_widgets gesetzt)
         self.start_button: Optional[ttk.Button] = None
@@ -1012,8 +1160,7 @@ class TradingGUI:
         self.create_widgets()
         self.setup_message_processing()
 
-        if config:
-            self.apply_config(config)
+        self.apply_config(self.current_config)
 
     def _configure_styles(self):
         """Globale Styles, Farben und Schriftarten setzen."""
@@ -1132,6 +1279,92 @@ class TradingGUI:
 
         self.style.configure('TEntry', padding=8)
         self.style.configure('TCombobox', padding=8)
+
+    def _prepare_config(self, config: Optional[Dict]) -> Dict:
+        """Sorgt für vollständige Konfigurationsstrukturen."""
+        prepared = deepcopy(self.config_manager.default_config)
+
+        if not config:
+            return prepared
+
+        for section, value in config.items():
+            if isinstance(value, dict) and isinstance(prepared.get(section), dict):
+                prepared_section = prepared.setdefault(section, {})
+                prepared_section.update(value)
+            else:
+                prepared[section] = value
+
+        return prepared
+
+    @staticmethod
+    def _safe_float(value, default: float) -> float:
+        try:
+            if isinstance(value, str):
+                normalized = value.replace(',', '.').strip()
+                if not normalized:
+                    return default
+                value = normalized
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _safe_int(value, default: int) -> int:
+        try:
+            if isinstance(value, str):
+                stripped = value.strip()
+                if not stripped:
+                    return default
+                value = stripped
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
+
+    def _validate_non_negative_float(self, proposed: str) -> bool:
+        if proposed.strip() == "":
+            return True
+        try:
+            return float(proposed.replace(',', '.')) >= 0.0
+        except ValueError:
+            return False
+
+    def _validate_non_negative_int(self, proposed: str) -> bool:
+        if proposed.strip() == "":
+            return True
+        try:
+            return int(float(proposed)) >= 0
+        except ValueError:
+            return False
+
+    def _on_trading_setting_change(self, setting_name: str):
+        if self._suppress_trading_var_update:
+            return
+
+        var = self.trading_vars.get(setting_name)
+        if not var:
+            return
+
+        try:
+            value = var.get()
+        except Exception:
+            return
+
+        if setting_name in {'default_lot_size', 'max_spread_pips', 'risk_percent'}:
+            numeric_value = self._safe_float(value, 0.0)
+            numeric_value = max(numeric_value, 0.0)
+        else:
+            numeric_value = self._safe_int(value, 0)
+            numeric_value = max(numeric_value, 0)
+
+        trading_cfg = self.current_config.setdefault('trading', {})
+        trading_cfg[setting_name] = numeric_value
+
+        self.bot.update_trading_settings(**{setting_name: numeric_value})
+
+        try:
+            self.config_manager.save_config(self.current_config)
+        except Exception as exc:
+            self.bot.log(f"Fehler beim Speichern der Trading-Konfiguration: {exc}", "ERROR")
 
     def create_widgets(self):
         """GUI-Widgets erstellen"""
@@ -1327,6 +1560,89 @@ class TradingGUI:
             style='Warning.TLabel'
         )
         warning_label.grid(row=1, column=0, columnspan=3, sticky='w', pady=(14, 0))
+
+        trading_settings = ttk.LabelFrame(
+            settings_tab,
+            text="Trading-Parameter",
+            padding="18",
+            style='Card.TLabelframe'
+        )
+        trading_settings.pack(fill='x', pady=(10, 16))
+        trading_settings.columnconfigure((1, 3), weight=1)
+
+        float_validate_cmd = (self.root.register(self._validate_non_negative_float), '%P')
+        int_validate_cmd = (self.root.register(self._validate_non_negative_int), '%P')
+
+        ttk.Label(
+            trading_settings,
+            text="Standard-Lotgröße",
+            style='FieldLabel.TLabel'
+        ).grid(row=0, column=0, sticky='w')
+        lot_spin = ttk.Spinbox(
+            trading_settings,
+            textvariable=self.default_lot_size_var,
+            from_=0.0,
+            to=100.0,
+            increment=0.01,
+            width=12,
+            validate='key',
+            validatecommand=float_validate_cmd,
+            format='%.2f'
+        )
+        lot_spin.grid(row=0, column=1, sticky='ew', padx=(8, 24))
+
+        ttk.Label(
+            trading_settings,
+            text="Maximaler Spread (Pips)",
+            style='FieldLabel.TLabel'
+        ).grid(row=0, column=2, sticky='w')
+        spread_spin = ttk.Spinbox(
+            trading_settings,
+            textvariable=self.max_spread_pips_var,
+            from_=0.0,
+            to=100.0,
+            increment=0.1,
+            width=12,
+            validate='key',
+            validatecommand=float_validate_cmd,
+            format='%.1f'
+        )
+        spread_spin.grid(row=0, column=3, sticky='ew')
+
+        ttk.Label(
+            trading_settings,
+            text="Risiko pro Trade (%)",
+            style='FieldLabel.TLabel'
+        ).grid(row=1, column=0, sticky='w', pady=(12, 0))
+        risk_spin = ttk.Spinbox(
+            trading_settings,
+            textvariable=self.risk_percent_var,
+            from_=0.0,
+            to=100.0,
+            increment=0.1,
+            width=12,
+            validate='key',
+            validatecommand=float_validate_cmd,
+            format='%.1f'
+        )
+        risk_spin.grid(row=1, column=1, sticky='ew', padx=(8, 24), pady=(12, 0))
+
+        ttk.Label(
+            trading_settings,
+            text="Max. Trades pro Stunde",
+            style='FieldLabel.TLabel'
+        ).grid(row=1, column=2, sticky='w', pady=(12, 0))
+        trades_spin = ttk.Spinbox(
+            trading_settings,
+            textvariable=self.max_trades_per_hour_var,
+            from_=0,
+            to=200,
+            increment=1,
+            width=12,
+            validate='key',
+            validatecommand=int_validate_cmd
+        )
+        trades_spin.grid(row=1, column=3, sticky='ew', pady=(12, 0))
 
         toolbar = ttk.Frame(settings_tab, style='Toolbar.TFrame', padding=(16, 12))
         toolbar.pack(fill='x', pady=(0, 18))
@@ -1679,7 +1995,9 @@ class TradingGUI:
 
     def apply_config(self, config: Dict):
         """Konfiguration auf Bot und GUI anwenden"""
-        telegram_cfg = config.get('telegram', {})
+        self.current_config = self._prepare_config(config)
+
+        telegram_cfg = self.current_config.get('telegram', {})
         session_name = telegram_cfg.get('session_name', 'trading_session')
         self.bot.update_credentials(
             telegram_cfg.get('api_id'),
@@ -1688,13 +2006,34 @@ class TradingGUI:
             session_name=session_name
         )
 
-        trading_cfg = config.get('trading', {})
+        trading_cfg = self.current_config.get('trading', {})
         demo_mode = bool(trading_cfg.get('demo_mode', True))
         self.bot.demo_mode = demo_mode
         if hasattr(self, 'demo_var'):
             self.demo_var.set(demo_mode)
         if hasattr(self, 'trade_status_label'):
             self.trade_status_label.config(text="Demo-Modus aktiv" if demo_mode else "LIVE-Modus aktiv")
+
+        lot_size = self._safe_float(trading_cfg.get('default_lot_size'), 0.01)
+        max_spread = self._safe_float(trading_cfg.get('max_spread_pips'), 3.0)
+        risk_percent = self._safe_float(trading_cfg.get('risk_percent'), 2.0)
+        trades_per_hour = self._safe_int(trading_cfg.get('max_trades_per_hour'), 5)
+
+        self._suppress_trading_var_update = True
+        try:
+            self.default_lot_size_var.set(lot_size)
+            self.max_spread_pips_var.set(max_spread)
+            self.risk_percent_var.set(risk_percent)
+            self.max_trades_per_hour_var.set(trades_per_hour)
+        finally:
+            self._suppress_trading_var_update = False
+
+        self.bot.update_trading_settings(
+            default_lot_size=lot_size,
+            max_spread_pips=max_spread,
+            risk_percent=risk_percent,
+            max_trades_per_hour=trades_per_hour
+        )
 
     def log_message(self, message):
         """Log-Nachricht in GUI anzeigen"""
