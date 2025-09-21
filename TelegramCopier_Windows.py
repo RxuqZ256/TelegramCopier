@@ -9,6 +9,7 @@ import re
 import json
 import queue
 import threading
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -657,24 +658,46 @@ class ConfigManager:
             }
         }
 
+    def ensure_structure(self, config):
+        """Sichert, dass alle benötigten Bereiche als Dicts vorhanden sind."""
+
+        def deep_merge(target, source):
+            for key, value in source.items():
+                if isinstance(value, dict):
+                    base = target.get(key)
+                    if not isinstance(base, dict):
+                        base = {}
+                    target[key] = deep_merge(base, value)
+                else:
+                    target[key] = value
+            return target
+
+        if not isinstance(config, dict):
+            return deepcopy(self.default_config)
+
+        merged = deepcopy(self.default_config)
+        return deep_merge(merged, config)
+
     def load_config(self):
         """Konfiguration laden"""
         try:
             if os.path.exists(self.config_file):
                 with open(self.config_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    loaded = json.load(f)
+                    return self.ensure_structure(loaded)
             else:
                 self.save_config(self.default_config)
-                return self.default_config
+                return deepcopy(self.default_config)
         except Exception as e:
             print(f"Fehler beim Laden der Konfiguration: {e}")
-            return self.default_config
+            return deepcopy(self.default_config)
 
     def save_config(self, config):
         """Konfiguration speichern"""
         try:
             with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=2, ensure_ascii=False)
+                safe_config = self.ensure_structure(config)
+                json.dump(safe_config, f, indent=2, ensure_ascii=False)
         except Exception as e:
             print(f"Fehler beim Speichern der Konfiguration: {e}")
 
@@ -694,12 +717,22 @@ class TradingGUI:
         self.config_manager = ConfigManager()
         self.config = self.config_manager.load_config()
 
-        api_id = str(self.config['telegram'].get('api_id') or "")
-        api_hash = self.config['telegram'].get('api_hash', "")
-        phone = self.config['telegram'].get('phone', "")
+        telegram_cfg = self.config.get('telegram')
+        if not isinstance(telegram_cfg, dict):
+            telegram_cfg = {}
+            self.config['telegram'] = telegram_cfg
+
+        trading_cfg = self.config.get('trading')
+        if not isinstance(trading_cfg, dict):
+            trading_cfg = {}
+            self.config['trading'] = trading_cfg
+
+        api_id = str(telegram_cfg.get('api_id') or "")
+        api_hash = telegram_cfg.get('api_hash', "")
+        phone = telegram_cfg.get('phone', "")
 
         self.bot = MultiChatTradingBot(api_id or "0", api_hash, phone)
-        self.bot.demo_mode = bool(self.config['trading'].get('demo_mode', True))
+        self.bot.demo_mode = bool(trading_cfg.get('demo_mode', True))
 
         self.metric_vars: Dict[str, tk.StringVar] = {}
         self.nav_buttons: Dict[str, ttk.Button] = {}
@@ -787,9 +820,13 @@ class TradingGUI:
         form = ttk.Frame(card, style="Card.TFrame")
         form.pack(fill='x')
 
-        self.api_id_var = tk.StringVar(value=self.config['telegram'].get('api_id', ""))
-        self.api_hash_var = tk.StringVar(value=self.config['telegram'].get('api_hash', ""))
-        self.phone_var = tk.StringVar(value=self.config['telegram'].get('phone', ""))
+        telegram_cfg = self.config.get('telegram')
+        if not isinstance(telegram_cfg, dict):
+            telegram_cfg = {}
+
+        self.api_id_var = tk.StringVar(value=telegram_cfg.get('api_id', ""))
+        self.api_hash_var = tk.StringVar(value=telegram_cfg.get('api_hash', ""))
+        self.phone_var = tk.StringVar(value=telegram_cfg.get('phone', ""))
 
         ttk.Label(form, text="Telegram App ID", style="CardTitle.TLabel", foreground=TEXT_PRIMARY).pack(anchor='w')
         ttk.Entry(form, textvariable=self.api_id_var, style="Dark.TEntry", width=40).pack(fill='x', pady=(0, 12))
@@ -835,10 +872,20 @@ class TradingGUI:
             messagebox.showerror("Unvollständige Angaben", "Bitte ergänze auch API Hash und Telefonnummer.")
             return
 
-        self.config['telegram']['api_id'] = api_id
-        self.config['telegram']['api_hash'] = api_hash
-        self.config['telegram']['phone'] = phone
-        self.config['trading']['demo_mode'] = bool(self.bot.demo_mode)
+        telegram_cfg = self.config.get('telegram')
+        if not isinstance(telegram_cfg, dict):
+            telegram_cfg = {}
+            self.config['telegram'] = telegram_cfg
+
+        trading_cfg = self.config.get('trading')
+        if not isinstance(trading_cfg, dict):
+            trading_cfg = {}
+            self.config['trading'] = trading_cfg
+
+        telegram_cfg['api_id'] = api_id
+        telegram_cfg['api_hash'] = api_hash
+        telegram_cfg['phone'] = phone
+        trading_cfg['demo_mode'] = bool(self.bot.demo_mode)
         self.config_manager.save_config(self.config)
 
         self.apply_credentials(api_id, api_hash, phone)
@@ -1375,7 +1422,11 @@ class TradingGUI:
 
     def toggle_demo_mode(self):
         self.bot.demo_mode = self.demo_var.get()
-        self.config['trading']['demo_mode'] = bool(self.bot.demo_mode)
+        trading_cfg = self.config.get('trading')
+        if not isinstance(trading_cfg, dict):
+            trading_cfg = {}
+            self.config['trading'] = trading_cfg
+        trading_cfg['demo_mode'] = bool(self.bot.demo_mode)
         self.config_manager.save_config(self.config)
         self.append_log(f"Modus geändert: {'Demo' if self.bot.demo_mode else 'Live'}")
         self.update_overview_metrics()
@@ -1388,10 +1439,20 @@ class TradingGUI:
             messagebox.showerror("Ungültige Eingabe", "Bitte gib gültige Zahlen für Lot-Größe und Max-Trades an.")
             return
 
-        self.config['trading']['default_lot_size'] = lot_size
-        self.config['trading']['max_trades_per_hour'] = max_trades
-        self.config.setdefault('signals', {})['auto_tp_sl'] = bool(self.auto_tp_var.get())
-        self.config['signals']['require_confirmation'] = bool(self.require_confirm_var.get())
+        trading_cfg = self.config.get('trading')
+        if not isinstance(trading_cfg, dict):
+            trading_cfg = {}
+            self.config['trading'] = trading_cfg
+
+        signals_cfg = self.config.get('signals')
+        if not isinstance(signals_cfg, dict):
+            signals_cfg = {}
+            self.config['signals'] = signals_cfg
+
+        trading_cfg['default_lot_size'] = lot_size
+        trading_cfg['max_trades_per_hour'] = max_trades
+        signals_cfg['auto_tp_sl'] = bool(self.auto_tp_var.get())
+        signals_cfg['require_confirmation'] = bool(self.require_confirm_var.get())
         self.config_manager.save_config(self.config)
         self.append_log("Automationseinstellungen gespeichert.")
         messagebox.showinfo("Gespeichert", "Automationseinstellungen wurden übernommen.")
