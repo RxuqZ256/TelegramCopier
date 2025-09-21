@@ -367,18 +367,23 @@ class SignalProcessor:
 class MultiChatTradingBot:
     """Haupt-Bot mit Multi-Chat-Unterstützung"""
 
-    def __init__(self, api_id: str, api_hash: str, phone: str):
-        self.api_id = int(api_id) if str(api_id).isdigit() else 0
-        self.api_hash = api_hash
-        self.phone = phone
+    def __init__(self, api_id: Optional[str] = None, api_hash: Optional[str] = None,
+                 phone: Optional[str] = None, session_name: str = "trading_session"):
+        self.api_id = 0
+        self.api_hash = ""
+        self.phone = ""
+        self.session_name = session_name
 
         # Components
         self.chat_manager = MultiChatManager()
         self.trade_tracker = TradeTracker()
         self.signal_processor = SignalProcessor()
 
-        # Telegram Client
-        self.client = TelegramClient('trading_session', self.api_id, self.api_hash)
+        # Telegram Client (initially None until gültige Zugangsdaten vorhanden)
+        self.client: Optional[TelegramClient] = None
+
+        # Zugangsdaten anwenden (falls vorhanden)
+        self.update_credentials(api_id, api_hash, phone, session_name=session_name)
 
         # Message Queue für GUI
         self.message_queue: "queue.Queue" = queue.Queue()
@@ -388,8 +393,36 @@ class MultiChatTradingBot:
         self.demo_mode = True  # Immer mit Demo starten!
         self.pending_trade_updates: Dict[int, Dict] = {}
 
-    async def start(self):
+    def update_credentials(self, api_id: Optional[str], api_hash: Optional[str], phone: Optional[str],
+                           session_name: Optional[str] = None):
+        """Telegram Zugangsdaten aktualisieren und Client neu initialisieren"""
+
+        if session_name:
+            self.session_name = session_name
+
+        # Vorherige Client-Instanz verwerfen
+        if self.client:
+            self.client = None
+
+        try:
+            self.api_id = int(api_id) if api_id else 0
+        except (TypeError, ValueError):
+            self.api_id = 0
+
+        self.api_hash = api_hash or ""
+        self.phone = phone or ""
+
+        if self.api_id and self.api_hash:
+            # Nur erstellen, wenn gültige Daten vorhanden sind
+            self.client = TelegramClient(self.session_name, self.api_id, self.api_hash)
+
+    async def start(self) -> bool:
         """Bot starten"""
+
+        if not self.client:
+            self.log("Telegram-Konfiguration fehlt. Bitte führen Sie das Setup aus.", "ERROR")
+            return False
+
         try:
             await self.client.connect()
 
@@ -406,9 +439,11 @@ class MultiChatTradingBot:
 
             # Client im Hintergrund laufen lassen
             asyncio.create_task(self.client.run_until_disconnected())
+            return True
 
         except Exception as e:
             self.log(f"Fehler beim Starten: {e}", "ERROR")
+            return False
 
     async def handle_new_message(self, event):
         """Neue Nachricht verarbeiten"""
@@ -555,6 +590,9 @@ class MultiChatTradingBot:
     async def load_all_chats(self):
         """Alle verfügbaren Chats laden"""
         chats_data = []
+        if not self.client:
+            self.log("Telegram-Konfiguration fehlt. Chats können nicht geladen werden.", "ERROR")
+            return chats_data
         try:
             async for dialog in self.client.iter_dialogs(limit=200):
                 chat_info = {
@@ -640,17 +678,20 @@ class ConfigManager:
 class TradingGUI:
     """Haupt-GUI für Multi-Chat-Trading"""
 
-    def __init__(self):
+    def __init__(self, config: Optional[Dict] = None):
         self.root = tk.Tk()
         self.root.title("Multi-Chat Trading Bot (Windows)")
         self.root.geometry("1200x800")
 
         # Bot-Instanz (setzt später Config/Setup)
-        self.bot = MultiChatTradingBot("0", "", "")
+        self.bot = MultiChatTradingBot(None, None, None)
 
         # GUI-Komponenten
         self.create_widgets()
         self.setup_message_processing()
+
+        if config:
+            self.apply_config(config)
 
     def create_widgets(self):
         """GUI-Widgets erstellen"""
@@ -869,17 +910,24 @@ class TradingGUI:
         def run_bot():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
+            started = False
             try:
-                loop.run_until_complete(self.bot.start())
-                self.root.after(0, lambda: self.status_label.config(text="Bot läuft"))
+                started = loop.run_until_complete(self.bot.start())
+                if started:
+                    self.root.after(0, lambda: self.status_label.config(text="Bot läuft"))
+                else:
+                    self.root.after(0, lambda: self.log_message(
+                        "Bot konnte nicht gestartet werden. Bitte prüfen Sie die Telegram-Konfiguration."
+                    ))
             except Exception as e:
                 self.root.after(0, lambda: self.log_message(f"Bot-Start-Fehler: {e}"))
             finally:
-                # run_until_disconnected läuft in eigenem Task; Loop offen halten:
-                try:
-                    loop.run_forever()
-                except Exception:
-                    pass
+                if started:
+                    # run_until_disconnected läuft in eigenem Task; Loop offen halten:
+                    try:
+                        loop.run_forever()
+                    except Exception:
+                        pass
                 loop.close()
 
         threading.Thread(target=run_bot, daemon=True).start()
@@ -887,11 +935,12 @@ class TradingGUI:
     def stop_bot(self):
         """Bot stoppen"""
         self.bot.is_running = False
-        try:
-            # Client sauber trennen
-            self.bot.client.disconnect()
-        except Exception:
-            pass
+        if self.bot.client:
+            try:
+                # Client sauber trennen
+                self.bot.client.disconnect()
+            except Exception:
+                pass
         self.status_label.config(text="Bot gestoppt")
 
     def setup_message_processing(self):
@@ -912,6 +961,23 @@ class TradingGUI:
             self.root.after(100, process_messages)
 
         process_messages()
+
+    def apply_config(self, config: Dict):
+        """Konfiguration auf Bot und GUI anwenden"""
+        telegram_cfg = config.get('telegram', {})
+        session_name = telegram_cfg.get('session_name', 'trading_session')
+        self.bot.update_credentials(
+            telegram_cfg.get('api_id'),
+            telegram_cfg.get('api_hash'),
+            telegram_cfg.get('phone'),
+            session_name=session_name
+        )
+
+        trading_cfg = config.get('trading', {})
+        demo_mode = bool(trading_cfg.get('demo_mode', True))
+        self.bot.demo_mode = demo_mode
+        if hasattr(self, 'demo_var'):
+            self.demo_var.set(demo_mode)
 
     def log_message(self, message):
         """Log-Nachricht in GUI anzeigen"""
@@ -1101,11 +1167,7 @@ def main():
 
         # Konfiguration laden und auf Bot anwenden
         cfg = ConfigManager().load_config()
-        app = TradingGUI()
-        app.bot.api_id = int(cfg['telegram'].get('api_id') or 0)
-        app.bot.api_hash = cfg['telegram'].get('api_hash', '')
-        app.bot.phone = cfg['telegram'].get('phone', '')
-        app.bot.demo_mode = bool(cfg['trading'].get('demo_mode', True))
+        app = TradingGUI(cfg)
         app.run()
 
     except Exception as e:
