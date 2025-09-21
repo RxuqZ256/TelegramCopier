@@ -416,6 +416,66 @@ class MultiChatTradingBot:
             # Nur erstellen, wenn gültige Daten vorhanden sind
             self.client = TelegramClient(self.session_name, self.api_id, self.api_hash)
 
+    async def ensure_connected(self) -> bool:
+        """Stellt sicher, dass der Telegram-Client verbunden ist."""
+        if not self.client:
+            return False
+
+        try:
+            if not self.client.is_connected():
+                await self.client.connect()
+            return True
+        except Exception as e:
+            self.log(f"Fehler beim Aufbau der Telegram-Verbindung: {e}", "ERROR")
+            return False
+
+    async def ensure_authorized(
+        self,
+        *,
+        request_code: bool = False,
+        notify_gui: bool = False,
+        message: Optional[str] = None
+    ) -> bool:
+        """Verbindungs- und Authentifizierungsprüfung mit optionaler Benachrichtigung."""
+
+        if not await self.ensure_connected():
+            return False
+
+        try:
+            if await self.client.is_user_authorized():
+                return True
+
+            if request_code:
+                if self.phone:
+                    try:
+                        await self.client.send_code_request(self.phone)
+                        self.log(
+                            "Login-Code angefordert. Bitte Code in der Anwendung eingeben.",
+                            "INFO"
+                        )
+                    except Exception as code_error:
+                        self.log(f"Fehler beim Anfordern des Login-Codes: {code_error}", "ERROR")
+                else:
+                    self.log(
+                        "Keine Telefonnummer hinterlegt. Login-Code kann nicht angefordert werden.",
+                        "ERROR"
+                    )
+
+            error_message = message or (
+                "Telegram-Login erforderlich. Bitte geben Sie den Login-Code ein."
+            )
+            self.log(error_message, "ERROR")
+            if notify_gui:
+                self.notify_auth_required(error_message)
+            return False
+        except Exception as e:
+            self.log(f"Fehler bei der Authentifizierungsprüfung: {e}", "ERROR")
+            return False
+
+    def notify_auth_required(self, message: str):
+        """GUI informieren, dass ein Login-Code benötigt wird."""
+        self.send_message('AUTH_REQUIRED', {'message': message})
+
     async def start(self) -> bool:
         """Bot starten"""
 
@@ -424,11 +484,13 @@ class MultiChatTradingBot:
             return False
 
         try:
-            await self.client.connect()
-
-            if not await self.client.is_user_authorized():
-                await self.client.send_code_request(self.phone)
-                # Code-Eingabe sollte über GUI / Telethon auth erfolgen
+            authorized = await self.ensure_authorized(
+                request_code=True,
+                notify_gui=True,
+                message="Telegram-Login erforderlich. Bitte geben Sie den Login-Code ein, um den Bot zu starten."
+            )
+            if not authorized:
+                return False
 
             @self.client.on(events.NewMessage)
             async def message_handler(event):
@@ -595,9 +657,15 @@ class MultiChatTradingBot:
             return chats_data
 
         try:
-            # Verbindung sicherstellen – iter_dialogs schlägt sonst mit "disconnected" fehl
-            if not self.client.is_connected():
-                await self.client.connect()
+            authorized = await self.ensure_authorized(
+                request_code=False,
+                notify_gui=True,
+                message=(
+                    "Telegram-Login erforderlich. Chats können erst nach Eingabe des Login-Codes geladen werden."
+                )
+            )
+            if not authorized:
+                return chats_data
 
             async for dialog in self.client.iter_dialogs(limit=200):
                 chat_info = {
@@ -995,6 +1063,12 @@ class TradingGUI:
                         self.log_message(str(data))
                     elif msg_type == 'TRADE_EXECUTED':
                         self.log_message(f"Trade ausgeführt: {data}")
+                    elif msg_type == 'AUTH_REQUIRED':
+                        info_message = data.get('message') if isinstance(data, dict) else str(data)
+                        self.root.after(
+                            0,
+                            lambda msg=info_message: self.show_auth_required_dialog(msg)
+                        )
 
             except queue.Empty:
                 pass
@@ -1024,6 +1098,11 @@ class TradingGUI:
         """Log-Nachricht in GUI anzeigen"""
         self.log_text.insert('end', f"{message}\n")
         self.log_text.see('end')
+
+    def show_auth_required_dialog(self, message: str):
+        """Dialog anzeigen, wenn ein Login-Code erforderlich ist."""
+        messagebox.showwarning("Telegram-Login erforderlich", message)
+        self.log_message(message)
 
     def run(self):
         """GUI starten"""
