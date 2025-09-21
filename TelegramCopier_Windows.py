@@ -1011,9 +1011,14 @@ class TradingGUI:
         }
 
         self.root.configure(bg=base_bg)
-        self.root.option_add('*Font', 'Segoe UI 10')
-        self.root.option_add('*TCombobox*Listbox.Font', 'Segoe UI 10')
-        self.root.option_add('*TEntry.Font', 'Segoe UI 10')
+        # Fonts with spaces in the family name must be wrapped in braces so that
+        # Tk does not interpret the second word ("UI") as the font size.  When
+        # this happens Tk raises the error "expected integer but got UI" during
+        # startup, resulting in a blank window for the user.  By adding braces
+        # we ensure the whole family name is passed correctly.
+        self.root.option_add('*Font', '{Segoe UI} 10')
+        self.root.option_add('*TCombobox*Listbox.Font', '{Segoe UI} 10')
+        self.root.option_add('*TEntry.Font', '{Segoe UI} 10')
 
         # Standard-Schriftarten über die Tk-Font-Objekte setzen, damit Tk sie korrekt
         # interpretiert und alle Widgets (inkl. ttk) konsistent aktualisiert werden.
