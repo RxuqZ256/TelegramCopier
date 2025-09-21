@@ -847,8 +847,14 @@ class TradingGUI:
                 ("performance", "Performance"),
             ]
 
+            self.nav_buttons.clear()
             for key, title in nav_items:
-                btn = ttk.Button(self.nav_frame, text=title, style="Nav.TButton", command=lambda k=key: self.show_page(k))
+                btn = ttk.Button(
+                    self.nav_frame,
+                    text=title,
+                    style="Nav.TButton",
+                    command=lambda k=key: self.show_page(k)
+                )
                 btn.pack(fill='x', pady=4)
                 self.nav_buttons[key] = btn
 
@@ -911,10 +917,15 @@ class TradingGUI:
         for key, title in metrics:
             card = ttk.Frame(cards_frame, style="Card.TFrame", padding=20)
             card.pack(side='left', expand=True, fill='x', padx=(0, 15))
-            ttk.Label(card, text=title, style="CardTitle.TLabel").pack(anchor='w')
+
+            title_label = ttk.Label(card, text=title, style="CardTitle.TLabel")
+            title_label.pack(anchor='w')
+
             var = tk.StringVar(value="-")
             self.metric_vars[key] = var
-            ttk.Label(card, textvariable=var, style="CardValue.TLabel").pack(anchor='w', pady=(6, 0))
+
+            value_label = ttk.Label(card, textvariable=var, style="CardValue.TLabel")
+            value_label.pack(anchor='w', pady=(6, 0))
 
         control_frame = ttk.Frame(frame, padding=(0, 20, 0, 10))
         control_frame.pack(fill='x')
@@ -924,7 +935,13 @@ class TradingGUI:
         log_container = ttk.Frame(frame)
         log_container.pack(fill='both', expand=True)
 
-        ttk.Label(log_container, text="Aktivitätsprotokoll", font=("Segoe UI", 12, "bold"), foreground=TEXT_MUTED).pack(anchor='w', pady=(0, 6))
+        log_title = ttk.Label(
+            log_container,
+            text="Aktivitätsprotokoll",
+            font=("Segoe UI", 12, "bold"),
+            foreground=TEXT_MUTED
+        )
+        log_title.pack(anchor='w', pady=(0, 6))
         log_frame = ttk.Frame(log_container, style="CardAlt.TFrame")
         log_frame.pack(fill='both', expand=True)
 
