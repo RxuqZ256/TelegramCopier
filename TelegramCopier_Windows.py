@@ -381,17 +381,19 @@ class MultiChatTradingBot:
     """Haupt-Bot mit Multi-Chat-Unterstützung"""
 
     def __init__(self, api_id: str, api_hash: str, phone: str):
-        self.api_id = int(api_id) if str(api_id).isdigit() else 0
-        self.api_hash = api_hash
-        self.phone = phone
+        # Credentials
+        self.api_id = 0
+        self.api_hash = ""
+        self.phone = ""
 
         # Components
         self.chat_manager = MultiChatManager()
         self.trade_tracker = TradeTracker()
         self.signal_processor = SignalProcessor()
 
-        # Telegram Client
-        self.client = TelegramClient('trading_session', self.api_id, self.api_hash)
+        # Telegram Client (erst erstellen, wenn gültige Daten vorhanden sind)
+        self.client: Optional[TelegramClient] = None
+        self.update_credentials(api_id, api_hash, phone)
 
         # Message Queue für GUI
         self.message_queue: "queue.Queue" = queue.Queue()
@@ -401,8 +403,33 @@ class MultiChatTradingBot:
         self.demo_mode = True  # Immer mit Demo starten!
         self.pending_trade_updates: Dict[int, Dict] = {}
 
+    def update_credentials(self, api_id: str, api_hash: str, phone: str):
+        """Telegram-Zugangsdaten aktualisieren und Client vorbereiten"""
+
+        # Vorherigen Client sauber schließen
+        if self.client:
+            try:
+                self.client.disconnect()
+            except Exception:
+                pass
+
+        self.client = None
+        self.api_id = int(api_id) if str(api_id).isdigit() else 0
+        self.api_hash = api_hash or ""
+        self.phone = phone or ""
+
+        if self.api_id and self.api_hash:
+            self.client = TelegramClient('trading_session', self.api_id, self.api_hash)
+
+    def has_active_client(self) -> bool:
+        return self.client is not None
+
     async def start(self):
         """Bot starten"""
+        if not self.client:
+            self.log("Telegram-Zugangsdaten fehlen. Bitte zuerst verbinden.", "ERROR")
+            return
+
         try:
             await self.client.connect()
 
@@ -567,6 +594,10 @@ class MultiChatTradingBot:
 
     async def load_all_chats(self):
         """Alle verfügbaren Chats laden"""
+        if not self.client:
+            self.log("Keine Telegram-Verbindung. Bitte Zugangsdaten hinterlegen und verbinden.", "ERROR")
+            return []
+
         chats_data = []
         try:
             async for dialog in self.client.iter_dialogs(limit=200):
@@ -815,9 +846,7 @@ class TradingGUI:
         messagebox.showinfo("Gespeichert", "Zugangsdaten gespeichert. Der Kopierer kann nun gestartet werden.")
 
     def apply_credentials(self, api_id: str, api_hash: str, phone: str):
-        self.bot.api_id = int(api_id) if str(api_id).isdigit() else 0
-        self.bot.api_hash = api_hash
-        self.bot.phone = phone
+        self.bot.update_credentials(api_id, api_hash, phone)
 
     def show_main_interface(self, initial: bool = False):
         if hasattr(self, 'start_frame'):
@@ -1181,6 +1210,11 @@ class TradingGUI:
                 self.trades_tree.delete(item)
 
     def start_bot(self):
+        if not self.bot.has_active_client():
+            messagebox.showerror("Keine Zugangsdaten", "Bitte hinterlege eine gültige App ID und API Hash, bevor der Bot gestartet wird.")
+            self.update_status_bar("Bot konnte nicht gestartet werden - fehlende Zugangsdaten")
+            return
+
         self.update_status_bar("Bot wird gestartet...")
 
         def run_bot():
@@ -1206,7 +1240,8 @@ class TradingGUI:
     def stop_bot(self):
         self.bot.is_running = False
         try:
-            self.bot.client.disconnect()
+            if self.bot.client:
+                self.bot.client.disconnect()
         except Exception:
             pass
         self.update_status_bar("Bot gestoppt")
@@ -1215,6 +1250,10 @@ class TradingGUI:
             self.connection_badge.configure(style="StatusWarn.TLabel")
 
     def load_chats(self):
+        if not self.bot.has_active_client():
+            messagebox.showerror("Keine Verbindung", "Ohne gültige Telegram-Verbindung können keine Chats geladen werden.")
+            return
+
         self.update_status_bar("Chats werden geladen...")
 
         def run_async():
