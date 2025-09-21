@@ -2820,15 +2820,19 @@ class TradingGUI:
             return
 
         login, password, server, path = self._collect_mt5_form_data()
-        self.save_mt5_credentials(silent=True)
 
         if not login or not password or not server:
             message = "Bitte geben Sie Login, Passwort und Server an, bevor Sie die Verbindung testen."
             self.log_message(message)
+            if hasattr(self, 'mt5_status_label'):
+                self.mt5_status_label.config(text="Angaben unvollständig")
             try:
                 messagebox.showwarning("Angaben unvollständig", message)
             except Exception:
                 pass
+            return
+
+        if not self.save_mt5_credentials(silent=True):
             return
 
         self.log_message("Teste MT5-Verbindung ...")
