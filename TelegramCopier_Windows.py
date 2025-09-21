@@ -757,10 +757,11 @@ class MultiChatTradingBot:
 
         try:
             authorized = await self.ensure_authorized(
-                request_code=False,
+                request_code=True,
                 notify_gui=True,
                 message=(
-                    "Telegram-Login erforderlich. Chats können erst nach Eingabe des Login-Codes geladen werden."
+                    "Telegram-Login erforderlich. Ein neuer Login-Code wurde angefordert. "
+                    "Bitte geben Sie ihn ein, um die Chats zu laden."
                 )
             )
             if not authorized:
