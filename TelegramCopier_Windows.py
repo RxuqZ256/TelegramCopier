@@ -756,9 +756,18 @@ class TradingGUI:
         self.root.title("Multi-Chat Trading Bot (Windows)")
         self.root.geometry("1200x800")
 
+        # Style & Theme
+        self.style = ttk.Style(self.root)
+        try:
+            self.style.theme_use('clam')
+        except tk.TclError:
+            pass
+        self._configure_styles()
+
         # Bot-Instanz (setzt später Config/Setup)
         self.bot = MultiChatTradingBot(None, None, None)
         self.bot_starting = False
+        self.cached_chat_data: List[Dict] = []
 
         # Buttons (werden in create_widgets gesetzt)
         self.start_button: Optional[ttk.Button] = None
@@ -770,115 +779,681 @@ class TradingGUI:
         if config:
             self.apply_config(config)
 
+    def _configure_styles(self):
+        """Globale Styles, Farben und Schriftarten für ein modernes Dark-UI setzen."""
+        base_bg = '#0f172a'
+        surface_bg = '#111c36'
+        card_bg = '#16213d'
+        accent_color = '#6366f1'
+        accent_hover = '#4f46e5'
+        accent_border = '#1f2a44'
+        text_color = '#f8fafc'
+        muted_text = '#94a3b8'
+
+        self.root.configure(bg=base_bg)
+
+        # Grund-Container
+        self.style.configure('TFrame', background=base_bg)
+        self.style.configure('Surface.TFrame', background=surface_bg)
+        self.style.configure('Header.TFrame', background=surface_bg)
+        self.style.configure('Toolbar.TFrame', background=surface_bg)
+        self.style.configure('Metric.TFrame', background=card_bg, borderwidth=0, relief='flat')
+        self.style.configure('Card.TFrame', background=surface_bg)
+
+        # Notebook & Tabs
+        self.style.configure('TNotebook', background=base_bg, borderwidth=0, padding=(0, 6, 0, 0))
+        self.style.configure(
+            'TNotebook.Tab',
+            font=('Segoe UI Semibold', 10),
+            padding=(18, 10),
+            background=surface_bg,
+            foreground=muted_text
+        )
+        self.style.map(
+            'TNotebook.Tab',
+            background=[('selected', card_bg)],
+            foreground=[('selected', text_color)],
+            expand=[('selected', [1, 1, 1, 0])]
+        )
+
+        # Labels & Typografie
+        self.style.configure('TLabel', background=base_bg, foreground=text_color, font=('Segoe UI', 10))
+        self.style.configure('HeroTitle.TLabel', background=surface_bg, foreground=text_color, font=('Segoe UI Semibold', 22))
+        self.style.configure('Title.TLabel', background=surface_bg, foreground=text_color, font=('Segoe UI Semibold', 18))
+        self.style.configure('SectionTitle.TLabel', background=surface_bg, foreground=text_color, font=('Segoe UI Semibold', 14))
+        self.style.configure('SectionTitleSmall.TLabel', background=surface_bg, foreground=text_color, font=('Segoe UI Semibold', 12))
+        self.style.configure('Subtitle.TLabel', background=surface_bg, foreground=muted_text, font=('Segoe UI', 11))
+        self.style.configure('Info.TLabel', background=surface_bg, foreground=muted_text, font=('Segoe UI', 10))
+        self.style.configure('FieldLabel.TLabel', background=surface_bg, foreground=muted_text, font=('Segoe UI', 10))
+        self.style.configure('Warning.TLabel', background=surface_bg, foreground='#f87171', font=('Segoe UI Semibold', 11))
+        self.style.configure('MetricTitle.TLabel', background=card_bg, foreground=muted_text, font=('Segoe UI', 10))
+        self.style.configure('MetricValue.TLabel', background=card_bg, foreground=text_color, font=('Segoe UI Semibold', 18))
+        self.style.configure('MetricInfo.TLabel', background=card_bg, foreground=muted_text, font=('Segoe UI', 9))
+        self.style.configure('Badge.TLabel', background=surface_bg, foreground=accent_color, font=('Segoe UI Semibold', 9))
+        self.style.configure('StatusBadge.TLabel', background='#1d2a44', foreground=text_color, font=('Segoe UI Semibold', 10))
+        self.style.configure('StatusBadgeSuccess.TLabel', background='#1f3b2c', foreground='#4ade80', font=('Segoe UI Semibold', 10))
+        self.style.configure('StatusBadgeAlert.TLabel', background='#3f1d28', foreground='#f87171', font=('Segoe UI Semibold', 10))
+
+        # Buttons & Interaktionen
+        self.style.configure(
+            'TButton',
+            font=('Segoe UI', 10),
+            padding=8,
+            background=surface_bg,
+            foreground=text_color,
+            borderwidth=0,
+            focusthickness=2,
+            focuscolor=accent_color
+        )
+        self.style.map('TButton', background=[('active', '#1b2540')])
+        self.style.configure(
+            'Accent.TButton',
+            background=accent_color,
+            foreground='#ffffff',
+            padding=10,
+            borderwidth=0
+        )
+        self.style.map(
+            'Accent.TButton',
+            background=[('active', accent_hover)],
+            foreground=[('disabled', '#475569')]
+        )
+        self.style.configure(
+            'Ghost.TButton',
+            background='#1b2540',
+            foreground=text_color,
+            padding=8,
+            borderwidth=1,
+            relief='flat'
+        )
+        self.style.map('Ghost.TButton', background=[('active', '#24304d')])
+        self.style.configure('Toolbar.TButton', background='#1b2540', foreground=text_color, padding=8)
+        self.style.map('Toolbar.TButton', background=[('active', '#24304d')])
+        self.style.configure('Link.TButton', background=surface_bg, foreground=accent_color, padding=0)
+        self.style.map('Link.TButton', foreground=[('active', accent_hover)])
+
+        # Eingabefelder
+        self.style.configure('TEntry', fieldbackground=surface_bg, foreground=text_color, insertcolor=text_color)
+        self.style.configure(
+            'Search.TEntry',
+            fieldbackground=card_bg,
+            background=card_bg,
+            foreground=text_color,
+            bordercolor=accent_border,
+            padding=6
+        )
+        self.style.map('Search.TEntry', fieldbackground=[('focus', '#1f2f52')])
+        self.style.configure(
+            'TCombobox',
+            fieldbackground=card_bg,
+            background=card_bg,
+            foreground=text_color,
+            bordercolor=accent_border
+        )
+        self.style.map('TCombobox', fieldbackground=[('readonly', card_bg)], foreground=[('readonly', text_color)], arrowcolor=[('active', accent_color), ('!disabled', muted_text)])
+
+        # Tabellen
+        self.style.configure(
+            'Treeview',
+            background=card_bg,
+            fieldbackground=card_bg,
+            foreground=text_color,
+            font=('Segoe UI', 10),
+            rowheight=28,
+            bordercolor=accent_border
+        )
+        self.style.configure(
+            'Treeview.Heading',
+            background='#1b2540',
+            foreground=text_color,
+            font=('Segoe UI Semibold', 10),
+            padding=10
+        )
+        self.style.configure('Dashboard.Treeview', rowheight=28)
+        self.style.map('Treeview', background=[('selected', accent_color)], foreground=[('selected', '#0b1220')])
+
+        # Checkbuttons & Separatoren
+        self.style.configure('TCheckbutton', background=surface_bg, foreground=text_color, font=('Segoe UI', 10))
+        self.style.configure('Switch.TCheckbutton', background=surface_bg, foreground=text_color, font=('Segoe UI Semibold', 10))
+        self.style.configure('TSeparator', background='#1e293b')
+
+        # Optionen für Dropdown-Listen
+        self.root.option_add('*TCombobox*Listbox.background', card_bg)
+        self.root.option_add('*TCombobox*Listbox.foreground', text_color)
+        self.root.option_add('*TCombobox*Listbox.selectBackground', accent_color)
+        self.root.option_add('*TCombobox*Listbox.selectForeground', '#0b1220')
+
     def create_widgets(self):
         """GUI-Widgets erstellen"""
 
         # Main Container
-        self.main_frame = ttk.Frame(self.root)
-        self.main_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        self.main_frame = ttk.Frame(self.root, padding=(28, 28, 28, 24))
+        self.main_frame.pack(fill='both', expand=True)
+        self.main_frame.columnconfigure(0, weight=1)
+        self.main_frame.rowconfigure(1, weight=1)
+
+        # Hero Header
+        hero_frame = ttk.Frame(self.main_frame, style='Surface.TFrame', padding=(24, 20))
+        hero_frame.grid(row=0, column=0, sticky='ew')
+        hero_frame.columnconfigure(0, weight=1)
+
+        hero_text = ttk.Frame(hero_frame, style='Surface.TFrame')
+        hero_text.grid(row=0, column=0, sticky='w')
+        ttk.Label(hero_text, text="TRADING SUITE", style='Badge.TLabel').pack(anchor='w')
+        ttk.Label(hero_text, text="Multi-Chat Trading Cockpit", style='HeroTitle.TLabel').pack(anchor='w', pady=(6, 2))
+        ttk.Label(
+            hero_text,
+            text="Synchronisiere Signale & verwalte Quellen in Echtzeit.",
+            style='Subtitle.TLabel',
+            wraplength=640
+        ).pack(anchor='w', pady=(2, 0))
+
+        hero_actions = ttk.Frame(hero_frame, style='Surface.TFrame')
+        hero_actions.grid(row=0, column=1, sticky='ne', padx=(16, 0))
+        hero_actions.columnconfigure((0, 1), weight=1)
+
+        self.start_button = ttk.Button(hero_actions, text="▶ Bot starten", command=self.start_bot, style='Accent.TButton')
+        self.start_button.grid(row=0, column=0, sticky='ew')
+        ttk.Button(hero_actions, text="■ Bot stoppen", command=self.stop_bot, style='Ghost.TButton').grid(
+            row=0,
+            column=1,
+            sticky='ew',
+            padx=(10, 0)
+        )
+        self.status_indicator = ttk.Label(hero_actions, text="Offline", style='StatusBadgeAlert.TLabel', padding=(14, 4))
+        self.status_indicator.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(10, 0))
 
         # Notebook-Tabs
         self.notebook = ttk.Notebook(self.main_frame)
-        self.notebook.pack(fill='both', expand=True)
+        self.notebook.grid(row=1, column=0, sticky='nsew', pady=(24, 16))
 
         self.create_chat_management_tab()
         self.create_trading_tab()
         self.create_statistics_tab()
 
         # Status Bar
-        self.status_frame = ttk.Frame(self.main_frame)
-        self.status_frame.pack(fill='x', pady=(10, 0))
+        status_bar = ttk.Frame(self.main_frame, style='Surface.TFrame', padding=(16, 12))
+        status_bar.grid(row=2, column=0, sticky='ew')
+        status_bar.columnconfigure(0, weight=1)
 
-        self.status_label = ttk.Label(self.status_frame, text="Bot gestoppt")
-        self.status_label.pack(side='left')
-
-        button_frame = ttk.Frame(self.status_frame)
-        button_frame.pack(side='right')
-
-        self.start_button = ttk.Button(button_frame, text="Bot starten", command=self.start_bot)
-        self.start_button.pack(side='left', padx=(0, 5))
-        ttk.Button(button_frame, text="Bot stoppen", command=self.stop_bot).pack(side='left')
+        self.status_label = ttk.Label(status_bar, text="Bot gestoppt", style='Info.TLabel')
+        self.status_label.grid(row=0, column=0, sticky='w')
+        self.status_meta_label = ttk.Label(status_bar, text="Bereit für Verbindung", style='Info.TLabel')
+        self.status_meta_label.grid(row=0, column=1, sticky='e')
 
     def create_chat_management_tab(self):
         """Chat-Management Tab"""
-        chat_frame = ttk.Frame(self.notebook)
+        chat_frame = ttk.Frame(self.notebook, padding=(16, 24, 16, 20), style='Surface.TFrame')
+        chat_frame.columnconfigure(0, weight=1)
+        chat_frame.rowconfigure(3, weight=1)
         self.notebook.add(chat_frame, text="Chat Management")
 
-        controls_frame = ttk.Frame(chat_frame)
-        controls_frame.pack(fill='x', padx=20, pady=20)
+        header = ttk.Frame(chat_frame, style='Surface.TFrame')
+        header.grid(row=0, column=0, sticky='ew')
+        header.columnconfigure(0, weight=1)
+        ttk.Label(header, text="Chat-Quellen", style='SectionTitle.TLabel').grid(row=0, column=0, sticky='w')
+        self.chat_summary_label = ttk.Label(header, text="0 Treffer • 0 Quellen", style='Info.TLabel')
+        self.chat_summary_label.grid(row=0, column=1, sticky='e')
+        ttk.Label(
+            header,
+            text="Verwalte alle verbundenen Telegram-Kanäle und priorisiere deine Signale.",
+            style='Subtitle.TLabel',
+            wraplength=760
+        ).grid(row=1, column=0, columnspan=2, sticky='w', pady=(6, 0))
 
-        ttk.Button(controls_frame, text="Chats laden", command=self.load_chats).pack(side='left', padx=(0, 10))
-        ttk.Button(controls_frame, text="Überwachung aktivieren", command=self.enable_monitoring).pack(side='left', padx=(0, 10))
-        ttk.Button(controls_frame, text="Überwachung deaktivieren", command=self.disable_monitoring).pack(side='left')
+        filter_bar = ttk.Frame(chat_frame, style='Surface.TFrame')
+        filter_bar.grid(row=1, column=0, sticky='ew', pady=(14, 12))
+        filter_bar.columnconfigure(0, weight=1)
 
-        list_frame = ttk.LabelFrame(chat_frame, text="Verfügbare Chats", padding="10")
-        list_frame.pack(fill='both', expand=True, padx=20, pady=(0, 20))
+        self.chat_filter_var = tk.StringVar()
+        search_entry = ttk.Entry(filter_bar, textvariable=self.chat_filter_var, style='Search.TEntry')
+        search_entry.grid(row=0, column=0, sticky='ew')
+        ttk.Button(filter_bar, text="Filter zurücksetzen", style='Ghost.TButton', command=self.reset_chat_filter).grid(
+            row=0,
+            column=1,
+            sticky='w',
+            padx=(12, 0)
+        )
+        ttk.Label(
+            filter_bar,
+            text="Filtere nach Name oder ID, um große Konfigurationen schnell zu durchsuchen.",
+            style='Info.TLabel'
+        ).grid(row=1, column=0, columnspan=2, sticky='w', pady=(6, 0))
+        self.chat_filter_var.trace_add('write', lambda *_: self.filter_chat_rows())
 
-        columns = ('Name', 'ID', 'Typ', 'Teilnehmer', 'Überwacht', 'Signale')
-        self.chats_tree = ttk.Treeview(list_frame, columns=columns, show='headings', height=15)
+        controls_frame = ttk.Frame(chat_frame, style='Toolbar.TFrame', padding=(16, 12))
+        controls_frame.grid(row=2, column=0, sticky='ew')
+        controls_frame.columnconfigure((0, 1, 2, 3), weight=1)
+
+        ttk.Button(
+            controls_frame,
+            text="🔄 Chats synchronisieren",
+            command=self.load_chats,
+            style='Toolbar.TButton'
+        ).grid(row=0, column=0, sticky='ew', padx=(0, 12))
+
+        ttk.Button(
+            controls_frame,
+            text="✅ Überwachung aktivieren",
+            command=self.enable_monitoring,
+            style='Toolbar.TButton'
+        ).grid(row=0, column=1, sticky='ew', padx=(0, 12))
+
+        ttk.Button(
+            controls_frame,
+            text="⏸ Überwachung deaktivieren",
+            command=self.disable_monitoring,
+            style='Toolbar.TButton'
+        ).grid(row=0, column=2, sticky='ew', padx=(0, 12))
+
+        ttk.Button(
+            controls_frame,
+            text="💾 Konfiguration sichern",
+            command=self.export_chat_config,
+            style='Toolbar.TButton'
+        ).grid(row=0, column=3, sticky='ew')
+
+        list_container = ttk.Frame(chat_frame, style='Surface.TFrame', padding=(18, 18, 18, 16))
+        list_container.grid(row=3, column=0, sticky='nsew')
+        list_container.columnconfigure(0, weight=1)
+        list_container.rowconfigure(1, weight=1)
+
+        table_header = ttk.Frame(list_container, style='Surface.TFrame')
+        table_header.grid(row=0, column=0, sticky='ew')
+        ttk.Label(table_header, text="Verfügbare Chats", style='SectionTitleSmall.TLabel').grid(row=0, column=0, sticky='w')
+        ttk.Label(
+            table_header,
+            text="Überblick über alle Quellen inklusive Mitglieder- und Signalzahlen.",
+            style='Info.TLabel'
+        ).grid(row=1, column=0, sticky='w', pady=(4, 0))
+
+        columns = ('Name', 'ID', 'Typ', 'Teilnehmer', 'Status', 'Signale')
+        heading_texts = {
+            'Name': 'Chat-Name',
+            'ID': 'Chat-ID',
+            'Typ': 'Art',
+            'Teilnehmer': 'Mitglieder',
+            'Status': 'Status',
+            'Signale': 'Signale gesamt'
+        }
+        column_widths = {
+            'Name': 280,
+            'ID': 150,
+            'Typ': 120,
+            'Teilnehmer': 140,
+            'Status': 130,
+            'Signale': 140
+        }
+
+        self.chats_tree = ttk.Treeview(
+            list_container,
+            columns=columns,
+            show='headings',
+            height=16,
+            style='Dashboard.Treeview'
+        )
+        self.chats_tree.grid(row=1, column=0, sticky='nsew', pady=(12, 0))
+        chat_scroll = ttk.Scrollbar(list_container, orient='vertical', command=self.chats_tree.yview)
+        chat_scroll.grid(row=1, column=1, sticky='ns', pady=(12, 0))
+        self.chats_tree.configure(yscrollcommand=chat_scroll.set, selectmode='extended')
+        self.chats_tree.tag_configure('even', background='#16213d')
+        self.chats_tree.tag_configure('odd', background='#1b2640')
+
         for col in columns:
-            self.chats_tree.heading(col, text=col)
+            self.chats_tree.heading(col, text=heading_texts.get(col, col))
+            self.chats_tree.column(col, width=column_widths.get(col, 140), anchor='w')
 
-        self.chats_tree.column('Name', width=200)
-        self.chats_tree.column('ID', width=120)
-        self.chats_tree.column('Typ', width=80)
-        self.chats_tree.column('Teilnehmer', width=100)
-        self.chats_tree.column('Überwacht', width=80)
-        self.chats_tree.column('Signale', width=80)
-        self.chats_tree.pack(side='left', fill='both', expand=True)
+        metrics_frame = ttk.Frame(chat_frame, style='Surface.TFrame')
+        metrics_frame.grid(row=4, column=0, sticky='ew', pady=(14, 0))
+        metrics_frame.columnconfigure((0, 1, 2), weight=1)
 
-        chat_scroll = ttk.Scrollbar(list_frame, orient='vertical', command=self.chats_tree.yview)
-        chat_scroll.pack(side='right', fill='y')
-        self.chats_tree.configure(yscrollcommand=chat_scroll.set)
+        self.chat_metric_vars = {
+            'total': tk.StringVar(value='0'),
+            'monitored': tk.StringVar(value='0'),
+            'signals': tk.StringVar(value='0')
+        }
+
+        metric_config = [
+            ("Quellen", 'total', "Gesamtzahl geladener Chats"),
+            ("Aktiv", 'monitored', "Chats mit aktiver Überwachung"),
+            ("Signale", 'signals', "Historische Signale aller Quellen")
+        ]
+        for idx, (title, key, caption) in enumerate(metric_config):
+            card = ttk.Frame(metrics_frame, style='Metric.TFrame', padding=(18, 14))
+            card.grid(row=0, column=idx, sticky='nsew', padx=(0 if idx == 0 else 12, 0))
+            ttk.Label(card, text=title, style='MetricTitle.TLabel').pack(anchor='w')
+            ttk.Label(card, textvariable=self.chat_metric_vars[key], style='MetricValue.TLabel').pack(anchor='w', pady=(6, 0))
+            ttk.Label(card, text=caption, style='MetricInfo.TLabel').pack(anchor='w', pady=(8, 0))
+
+        info_frame = ttk.Frame(chat_frame, style='Surface.TFrame')
+        info_frame.grid(row=5, column=0, sticky='ew', pady=(12, 0))
+        info_frame.columnconfigure(0, weight=1)
+        ttk.Label(
+            info_frame,
+            text="Hinweis: Aktivierte Chats werden kontinuierlich synchronisiert.",
+            style='Info.TLabel'
+        ).grid(row=0, column=0, sticky='w')
+        ttk.Button(
+            info_frame,
+            text="ℹ Hilfe",
+            style='Link.TButton',
+            command=lambda: messagebox.showinfo(
+                "Information",
+                "Markieren Sie Chats und nutzen Sie die Toolbar, um die Überwachung anzupassen."
+            )
+        ).grid(row=0, column=1, sticky='e')
 
     def create_trading_tab(self):
         """Trading Tab"""
-        trading_frame = ttk.Frame(self.notebook)
+        trading_frame = ttk.Frame(self.notebook, padding=(16, 24, 16, 20), style='Surface.TFrame')
+        trading_frame.columnconfigure(0, weight=1)
+        trading_frame.rowconfigure(3, weight=1)
         self.notebook.add(trading_frame, text="Trading")
 
-        settings_frame = ttk.LabelFrame(trading_frame, text="Einstellungen", padding="15")
-        settings_frame.pack(fill='x', padx=20, pady=20)
+        header = ttk.Frame(trading_frame, style='Surface.TFrame')
+        header.grid(row=0, column=0, sticky='ew')
+        header.columnconfigure(0, weight=1)
+        ttk.Label(header, text="Trading-Steuerung", style='SectionTitle.TLabel').grid(row=0, column=0, sticky='w')
+        self.trade_status_label = ttk.Label(header, text="Demo aktiv", style='StatusBadgeSuccess.TLabel', padding=(12, 4))
+        self.trade_status_label.grid(row=0, column=1, sticky='e')
+        ttk.Label(
+            header,
+            text="Steuere Orderausführung, überwache Signale und optimiere dein Risikomanagement.",
+            style='Subtitle.TLabel',
+            wraplength=760
+        ).grid(row=1, column=0, columnspan=2, sticky='w', pady=(6, 0))
+
+        settings_frame = ttk.Frame(trading_frame, style='Surface.TFrame', padding=(18, 16))
+        settings_frame.grid(row=1, column=0, sticky='ew', pady=(14, 12))
+        settings_frame.columnconfigure((0, 1, 2), weight=1)
 
         self.demo_var = tk.BooleanVar(value=True)
-        demo_check = ttk.Checkbutton(settings_frame, text="Demo-Modus (Empfohlen!)",
-                                     variable=self.demo_var, command=self.toggle_demo_mode)
-        demo_check.pack(anchor='w')
-
-        warning_label = ttk.Label(
+        ttk.Checkbutton(
             settings_frame,
-            text="WARNUNG: Automatisiertes Trading birgt hohe Verlustrisiken!",
-            foreground='red'
+            text="Demo-Modus (Empfohlen)",
+            variable=self.demo_var,
+            command=self.toggle_demo_mode,
+            style='Switch.TCheckbutton'
+        ).grid(row=0, column=0, sticky='w')
+
+        ttk.Label(settings_frame, text="Handelsmodus", style='FieldLabel.TLabel').grid(row=0, column=1, sticky='w')
+        self.execution_mode_var = tk.StringVar(value="Sofortausführung")
+        ttk.Combobox(
+            settings_frame,
+            textvariable=self.execution_mode_var,
+            values=["Sofortausführung", "Zone Monitoring", "Ausgeschaltet"],
+            state='readonly'
+        ).grid(row=0, column=2, sticky='ew', padx=(8, 0))
+
+        ttk.Separator(settings_frame).grid(row=1, column=0, columnspan=3, sticky='ew', pady=(14, 12))
+
+        toolbar = ttk.Frame(settings_frame, style='Toolbar.TFrame')
+        toolbar.grid(row=2, column=0, columnspan=3, sticky='ew')
+        ttk.Button(toolbar, text="📥 Signale abrufen", style='Toolbar.TButton', command=self.load_chats).grid(row=0, column=0, padx=(0, 12), sticky='w')
+        ttk.Button(toolbar, text="🧹 Log leeren", style='Toolbar.TButton', command=self.clear_log).grid(row=0, column=1, padx=(0, 12), sticky='w')
+        ttk.Button(toolbar, text="📊 Statistiken", style='Toolbar.TButton', command=self.refresh_statistics).grid(row=0, column=2, sticky='w')
+
+        ttk.Label(
+            settings_frame,
+            text="⚠ Automatisiertes Trading birgt hohe Verlustrisiken!",
+            style='Warning.TLabel'
+        ).grid(row=3, column=0, columnspan=3, sticky='w', pady=(14, 0))
+
+        metrics_frame = ttk.Frame(trading_frame, style='Surface.TFrame')
+        metrics_frame.grid(row=2, column=0, sticky='ew')
+        metrics_frame.columnconfigure((0, 1, 2), weight=1)
+        for idx, (title, value, caption) in enumerate([
+            ("Aktive Signale", "0", "Momentan beobachtete Signalquellen"),
+            ("Offene Trades", "0", "Trades mit offenem Status"),
+            ("Heute synchronisiert", "0", "Signale seit Tagesbeginn")
+        ]):
+            metric = ttk.Frame(metrics_frame, style='Metric.TFrame', padding=(18, 14))
+            metric.grid(row=0, column=idx, padx=(0 if idx == 0 else 12, 0), sticky='nsew')
+            ttk.Label(metric, text=title, style='MetricTitle.TLabel').pack(anchor='w')
+            ttk.Label(metric, text=value, style='MetricValue.TLabel').pack(anchor='w', pady=(6, 0))
+            ttk.Label(metric, text=caption, style='MetricInfo.TLabel').pack(anchor='w', pady=(8, 0))
+
+        log_card = ttk.Frame(trading_frame, style='Surface.TFrame', padding=(18, 18, 18, 16))
+        log_card.grid(row=3, column=0, sticky='nsew', pady=(16, 0))
+        log_card.columnconfigure(0, weight=1)
+        log_card.columnconfigure(1, weight=1)
+        log_card.rowconfigure(1, weight=1)
+
+        ttk.Label(log_card, text="Live Trade Log", style='SectionTitleSmall.TLabel').grid(row=0, column=0, sticky='w')
+        ttk.Label(
+            log_card,
+            text="Behalte Ausführungen und Systemmeldungen in Echtzeit im Blick.",
+            style='Info.TLabel'
+        ).grid(row=0, column=1, sticky='e')
+
+        log_container = ttk.Frame(log_card, style='Surface.TFrame')
+        log_container.grid(row=1, column=0, columnspan=2, sticky='nsew', pady=(12, 0))
+        log_container.columnconfigure(0, weight=1)
+        log_container.rowconfigure(0, weight=1)
+
+        self.log_text = tk.Text(
+            log_container,
+            wrap='word',
+            bg='#0a1124',
+            fg='#f8fafc',
+            insertbackground='#f8fafc',
+            font=('JetBrains Mono', 11),
+            borderwidth=0,
+            relief='flat',
+            highlightthickness=0
         )
-        warning_label.pack(anchor='w', pady=(10, 0))
+        self.log_text.grid(row=0, column=0, sticky='nsew')
 
-        log_frame = ttk.LabelFrame(trading_frame, text="Trade Log", padding="10")
-        log_frame.pack(fill='both', expand=True, padx=20, pady=(0, 20))
-
-        self.log_text = tk.Text(log_frame, height=15, wrap='word')
-        self.log_text.pack(side='left', fill='both', expand=True)
-
-        log_scroll = ttk.Scrollbar(log_frame, orient='vertical', command=self.log_text.yview)
-        log_scroll.pack(side='right', fill='y')
-        self.log_text.configure(yscrollcommand=log_scroll.set)
+        log_scroll = ttk.Scrollbar(log_container, orient='vertical', command=self.log_text.yview)
+        log_scroll.grid(row=0, column=1, sticky='ns')
+        self.log_text.configure(yscrollcommand=log_scroll.set, padx=16, pady=14)
 
     def create_statistics_tab(self):
         """Statistiken Tab"""
-        stats_frame = ttk.Frame(self.notebook)
+        stats_frame = ttk.Frame(self.notebook, padding=(16, 24, 16, 20), style='Surface.TFrame')
+        stats_frame.columnconfigure(0, weight=1)
+        stats_frame.rowconfigure(2, weight=1)
         self.notebook.add(stats_frame, text="Statistiken")
 
-        source_frame = ttk.LabelFrame(stats_frame, text="Statistiken nach Quelle", padding="15")
-        source_frame.pack(fill='both', expand=True, padx=20, pady=20)
+        header = ttk.Frame(stats_frame, style='Surface.TFrame')
+        header.grid(row=0, column=0, sticky='ew')
+        header.columnconfigure(0, weight=1)
+        ttk.Label(header, text="Performance & Statistiken", style='SectionTitle.TLabel').grid(row=0, column=0, sticky='w')
+        self.statistics_hint = ttk.Label(header, text="Letzte Aktualisierung: –", style='Info.TLabel')
+        self.statistics_hint.grid(row=0, column=1, sticky='e')
+        ttk.Label(
+            header,
+            text="Analysiere Trefferquoten, Profit und Quelleffizienz in Echtzeit.",
+            style='Subtitle.TLabel',
+            wraplength=760
+        ).grid(row=1, column=0, columnspan=2, sticky='w', pady=(6, 0))
+
+        kpi_frame = ttk.Frame(stats_frame, style='Surface.TFrame')
+        kpi_frame.grid(row=1, column=0, sticky='ew', pady=(14, 12))
+        kpi_frame.columnconfigure((0, 1, 2), weight=1)
+        for idx, (title, value, caption) in enumerate([
+            ("Gesamtgewinn", "0.00", "Summierter Profit aller Trades"),
+            ("Trefferquote", "0.0%", "Gewonnene Trades in Prozent"),
+            ("Signale gesamt", "0", "Eingegangene Signale aller Quellen")
+        ]):
+            card = ttk.Frame(kpi_frame, style='Metric.TFrame', padding=(18, 14))
+            card.grid(row=0, column=idx, padx=(0 if idx == 0 else 12, 0), sticky='nsew')
+            ttk.Label(card, text=title, style='MetricTitle.TLabel').pack(anchor='w')
+            ttk.Label(card, text=value, style='MetricValue.TLabel').pack(anchor='w', pady=(6, 0))
+            ttk.Label(card, text=caption, style='MetricInfo.TLabel').pack(anchor='w', pady=(8, 0))
+
+        table_container = ttk.Frame(stats_frame, style='Surface.TFrame', padding=(18, 18, 18, 16))
+        table_container.grid(row=2, column=0, sticky='nsew')
+        table_container.columnconfigure(0, weight=1)
+        table_container.rowconfigure(1, weight=1)
+
+        table_header = ttk.Frame(table_container, style='Surface.TFrame')
+        table_header.grid(row=0, column=0, sticky='ew')
+        ttk.Label(table_header, text="Statistiken nach Quelle", style='SectionTitleSmall.TLabel').grid(row=0, column=0, sticky='w')
+        ttk.Label(
+            table_header,
+            text="Vergleiche Performance und Aktivität deiner Signalgeber.",
+            style='Info.TLabel'
+        ).grid(row=1, column=0, sticky='w', pady=(4, 0))
 
         stats_columns = ('Quelle', 'Trades', 'Gewinnrate', 'Profit', 'Letzter Trade')
-        self.stats_tree = ttk.Treeview(source_frame, columns=stats_columns, show='headings', height=10)
-        for col in stats_columns:
-            self.stats_tree.heading(col, text=col)
-        self.stats_tree.pack(fill='both', expand=True)
+        heading_texts = {
+            'Quelle': 'Signal-Quelle',
+            'Trades': 'Trades gesamt',
+            'Gewinnrate': 'Trefferquote',
+            'Profit': 'Netto-Profit',
+            'Letzter Trade': 'Letzte Aktivität'
+        }
+        column_widths = {
+            'Quelle': 260,
+            'Trades': 140,
+            'Gewinnrate': 150,
+            'Profit': 160,
+            'Letzter Trade': 180
+        }
 
-        ttk.Button(source_frame, text="Statistiken aktualisieren", command=self.refresh_statistics).pack(pady=(10, 0))
+        self.stats_tree = ttk.Treeview(
+            table_container,
+            columns=stats_columns,
+            show='headings',
+            height=12,
+            style='Dashboard.Treeview'
+        )
+        self.stats_tree.grid(row=1, column=0, sticky='nsew', pady=(12, 0))
+        stats_scroll = ttk.Scrollbar(table_container, orient='vertical', command=self.stats_tree.yview)
+        stats_scroll.grid(row=1, column=1, sticky='ns', pady=(12, 0))
+        self.stats_tree.configure(yscrollcommand=stats_scroll.set)
+        self.stats_tree.tag_configure('even', background='#16213d')
+        self.stats_tree.tag_configure('odd', background='#1b2640')
+
+        for col in stats_columns:
+            self.stats_tree.heading(col, text=heading_texts.get(col, col))
+            self.stats_tree.column(col, width=column_widths.get(col, 140), anchor='w')
+
+        actions_frame = ttk.Frame(stats_frame, style='Surface.TFrame')
+        actions_frame.grid(row=3, column=0, sticky='ew', pady=(14, 0))
+        ttk.Button(actions_frame, text="🔁 Aktualisieren", style='Toolbar.TButton', command=self.refresh_statistics).pack(side='left')
+        ttk.Button(actions_frame, text="📤 Export", style='Toolbar.TButton', command=self.export_statistics).pack(side='left', padx=(12, 0))
+
+    def reset_chat_filter(self):
+        """Filter zurücksetzen und komplette Liste anzeigen."""
+        if hasattr(self, 'chat_filter_var'):
+            self.chat_filter_var.set('')
+        else:
+            self.filter_chat_rows()
+
+    def filter_chat_rows(self, *_):
+        """Chat-Ansicht anhand des Filtertextes aktualisieren."""
+        query = ''
+        if hasattr(self, 'chat_filter_var'):
+            query = self.chat_filter_var.get().strip().lower()
+
+        data = getattr(self, 'cached_chat_data', [])
+        if query:
+            filtered = [record for record in data if query in record.get('search_blob', '')]
+        else:
+            filtered = data
+
+        self._populate_chat_tree(filtered, total_data=data)
+
+    def _populate_chat_tree(self, display_data, total_data=None):
+        """Hilfsroutine zum Rendern der Chat-Tabelle mit Metrics."""
+        if not hasattr(self, 'chats_tree'):
+            return
+
+        self.chats_tree.delete(*self.chats_tree.get_children())
+        for index, record in enumerate(display_data):
+            tag = 'even' if index % 2 == 0 else 'odd'
+            self.chats_tree.insert('', 'end', values=record['values'], tags=(tag,))
+
+        self.chats_tree.yview_moveto(0)
+
+        total_data = total_data if total_data is not None else display_data
+        total_sources = len(total_data)
+        monitored_sources = sum(1 for record in total_data if record.get('is_monitored'))
+        total_signals = sum(record.get('signal_count', 0) for record in total_data)
+        filtered_count = len(display_data)
+
+        if hasattr(self, 'chat_summary_label'):
+            if total_sources == 0:
+                summary_text = "Keine Chats geladen"
+            else:
+                summary_text = f"{filtered_count} Treffer • {total_sources} Quellen"
+            self.chat_summary_label.config(text=summary_text)
+
+        if hasattr(self, 'chat_metric_vars'):
+            self.chat_metric_vars['total'].set(str(total_sources))
+            self.chat_metric_vars['monitored'].set(str(monitored_sources))
+            self.chat_metric_vars['signals'].set(str(total_signals))
+
+        if hasattr(self, 'status_meta_label') and total_sources:
+            self.status_meta_label.config(text=f"Aktualisiert um {datetime.now().strftime('%H:%M')}")
+
+    def _set_cached_chat_enabled(self, chat_id: int, enabled: bool):
+        """Cache-Eintrag für eine Chat-ID aktualisieren."""
+        for record in getattr(self, 'cached_chat_data', []):
+            if record.get('id') == chat_id:
+                values = list(record['values'])
+                values[4] = 'Aktiv' if enabled else 'Inaktiv'
+                record['values'] = tuple(values)
+                record['is_monitored'] = enabled
+                break
+
+    def clear_log(self):
+        """Log-Anzeige leeren."""
+        if hasattr(self, 'log_text'):
+            self.log_text.delete('1.0', 'end')
+            self.log_text.insert('end', "--- Log gelöscht ---\n")
+        if hasattr(self, 'status_meta_label'):
+            self.status_meta_label.config(text="Log geleert")
+
+    def export_chat_config(self):
+        """Chat-Konfiguration sichern."""
+        try:
+            self.bot.chat_manager.save_config()
+            messagebox.showinfo(
+                "Export abgeschlossen",
+                "Die Chat-Konfiguration wurde unter 'chat_config.json' gespeichert."
+            )
+            if hasattr(self, 'status_meta_label'):
+                self.status_meta_label.config(text="Konfiguration exportiert")
+        except Exception as exc:
+            messagebox.showerror("Fehler", f"Konfiguration konnte nicht gespeichert werden: {exc}")
+
+    def export_statistics(self):
+        """Aktuelle Statistikdaten exportieren."""
+        try:
+            export_data = []
+            for chat_source in self.bot.chat_manager.chat_sources.values():
+                stats = self.bot.trade_tracker.get_source_statistics(chat_source.chat_name)
+                export_data.append({
+                    'chat_name': chat_source.chat_name,
+                    'total_trades': stats['total_trades'],
+                    'win_rate': stats['win_rate'],
+                    'total_profit': stats['total_profit'],
+                    'last_trade': stats['last_trade'].isoformat() if stats['last_trade'] else None
+                })
+
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f'statistics_{timestamp}.json'
+            with open(filename, 'w', encoding='utf-8') as export_file:
+                json.dump(export_data, export_file, indent=2, ensure_ascii=False)
+
+            messagebox.showinfo("Export abgeschlossen", f"Statistiken wurden in '{filename}' gespeichert.")
+            if hasattr(self, 'status_meta_label'):
+                self.status_meta_label.config(text="Statistiken exportiert")
+        except Exception as exc:
+            messagebox.showerror("Fehler", f"Statistiken konnten nicht exportiert werden: {exc}")
 
     def load_chats(self):
         """Chats laden (async wrapper)"""
+
+        if hasattr(self, 'status_indicator'):
+            self.status_indicator.config(text="Synchronisieren…", style='StatusBadge.TLabel')
+        if hasattr(self, 'status_label'):
+            self.status_label.config(text="Chats werden synchronisiert…")
+        if hasattr(self, 'status_meta_label'):
+            self.status_meta_label.config(text="Abruf gestartet")
 
         def run_async():
             loop = asyncio.new_event_loop()
@@ -887,7 +1462,14 @@ class TradingGUI:
                 chats = loop.run_until_complete(self.bot.load_all_chats())
                 self.root.after(0, lambda: self.update_chat_list(chats))
             except Exception as e:
-                self.root.after(0, lambda: self.log_message(f"Fehler beim Laden: {e}"))
+                def handle_error(err=e):
+                    self.log_message(f"Fehler beim Laden: {err}")
+                    if hasattr(self, 'status_indicator'):
+                        self.status_indicator.config(text="Sync fehlgeschlagen", style='StatusBadgeAlert.TLabel')
+                    if hasattr(self, 'status_meta_label'):
+                        self.status_meta_label.config(text="Fehler beim Laden")
+
+                self.root.after(0, handle_error)
             finally:
                 loop.close()
 
@@ -895,24 +1477,47 @@ class TradingGUI:
 
     def update_chat_list(self, chats_data):
         """Chat-Liste in GUI aktualisieren"""
-        for item in self.chats_tree.get_children():
-            self.chats_tree.delete(item)
-
+        self.cached_chat_data = []
         for chat in chats_data:
             chat_source = self.bot.chat_manager.get_chat_info(chat['id'])
-            is_monitored = "Ja" if chat_source and chat_source.enabled else "Nein"
+            is_enabled = bool(chat_source and chat_source.enabled)
             signal_count = chat_source.signal_count if chat_source else 0
 
-            self.chats_tree.insert('', 'end', values=(
-                chat['name'],
-                chat['id'],
-                chat['type'],
-                chat['participants'],
-                is_monitored,
+            participants = chat.get('participants', '-')
+            if isinstance(participants, int):
+                participants_text = f"{participants:,}".replace(',', '.')
+            else:
+                participants_text = str(participants)
+
+            values = (
+                chat.get('name', 'Unbekannt'),
+                chat.get('id', ''),
+                str(chat.get('type', 'unbekannt')).title(),
+                participants_text,
+                'Aktiv' if is_enabled else 'Inaktiv',
                 signal_count
-            ))
+            )
+
+            self.cached_chat_data.append({
+                'id': chat.get('id'),
+                'values': values,
+                'is_monitored': is_enabled,
+                'signal_count': signal_count,
+                'search_blob': f"{chat.get('name', '')} {chat.get('id', '')} {chat.get('type', '')}".lower()
+            })
+
+        self.filter_chat_rows()
 
         self.status_label.config(text=f"Chats geladen: {len(chats_data)}")
+        if hasattr(self, 'status_indicator'):
+            indicator_style = 'StatusBadgeSuccess.TLabel' if chats_data else 'StatusBadgeAlert.TLabel'
+            indicator_text = 'Quellen synchronisiert' if chats_data else 'Keine Quellen'
+            self.status_indicator.config(text=indicator_text, style=indicator_style)
+        if hasattr(self, 'status_meta_label'):
+            if chats_data:
+                self.status_meta_label.config(text=f"Aktualisiert um {datetime.now().strftime('%H:%M')}")
+            else:
+                self.status_meta_label.config(text="Keine Daten verfügbar")
 
     def enable_monitoring(self):
         """Überwachung für ausgewählte Chats aktivieren"""
@@ -921,18 +1526,27 @@ class TradingGUI:
             messagebox.showwarning("Keine Auswahl", "Bitte wählen Sie Chats aus.")
             return
 
+        updated_ids = []
         for item in selection:
             values = self.chats_tree.item(item)['values']
             chat_id = int(values[1])
             chat_name = values[0]
             chat_type = values[2]
 
-            self.bot.chat_manager.add_chat_source(chat_id, chat_name, chat_type, True)
+            chat_source = self.bot.chat_manager.get_chat_info(chat_id)
+            if not chat_source:
+                self.bot.chat_manager.add_chat_source(chat_id, chat_name, chat_type, True)
+            else:
+                chat_source.enabled = True
+            updated_ids.append(chat_id)
 
-            new_values = list(values)
-            new_values[4] = "Ja"
-            self.chats_tree.item(item, values=new_values)
+        self.bot.chat_manager.save_config()
+        for chat_id in updated_ids:
+            self._set_cached_chat_enabled(chat_id, True)
 
+        self.filter_chat_rows()
+        if hasattr(self, 'status_meta_label'):
+            self.status_meta_label.config(text="Monitoring aktualisiert")
         messagebox.showinfo("Erfolg", f"{len(selection)} Chat(s) aktiviert")
 
     def disable_monitoring(self):
@@ -942,6 +1556,7 @@ class TradingGUI:
             messagebox.showwarning("Keine Auswahl", "Bitte wählen Sie Chats aus.")
             return
 
+        updated_ids = []
         for item in selection:
             values = self.chats_tree.item(item)['values']
             chat_id = int(values[1])
@@ -949,12 +1564,15 @@ class TradingGUI:
             chat_source = self.bot.chat_manager.get_chat_info(chat_id)
             if chat_source:
                 chat_source.enabled = False
-
-            new_values = list(values)
-            new_values[4] = "Nein"
-            self.chats_tree.item(item, values=new_values)
+            updated_ids.append(chat_id)
 
         self.bot.chat_manager.save_config()
+        for chat_id in updated_ids:
+            self._set_cached_chat_enabled(chat_id, False)
+
+        self.filter_chat_rows()
+        if hasattr(self, 'status_meta_label'):
+            self.status_meta_label.config(text="Monitoring aktualisiert")
         messagebox.showinfo("Erfolg", f"{len(selection)} Chat(s) deaktiviert")
 
     def refresh_statistics(self):
@@ -962,25 +1580,37 @@ class TradingGUI:
         for item in self.stats_tree.get_children():
             self.stats_tree.delete(item)
 
-        for chat_source in self.bot.chat_manager.chat_sources.values():
+        for idx, chat_source in enumerate(self.bot.chat_manager.chat_sources.values()):
             stats = self.bot.trade_tracker.get_source_statistics(chat_source.chat_name)
 
             last_trade = "Nie"
             if stats['last_trade']:
                 last_trade = stats['last_trade'].strftime("%d.%m %H:%M")
 
+            tag = 'even' if idx % 2 == 0 else 'odd'
             self.stats_tree.insert('', 'end', values=(
                 chat_source.chat_name,
                 stats['total_trades'],
                 f"{stats['win_rate']:.1f}%",
                 f"{stats['total_profit']:.2f}",
                 last_trade
-            ))
+            ), tags=(tag,))
+
+        if hasattr(self, 'statistics_hint'):
+            self.statistics_hint.config(
+                text=f"Letzte Aktualisierung: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+            )
+        if hasattr(self, 'status_meta_label'):
+            self.status_meta_label.config(text="Statistiken aktualisiert")
 
     def toggle_demo_mode(self):
         """Demo-Modus umschalten"""
         self.bot.demo_mode = self.demo_var.get()
         mode_text = "Demo-Modus" if self.bot.demo_mode else "LIVE-Modus"
+        if hasattr(self, 'trade_status_label'):
+            status_text = "Demo aktiv" if self.bot.demo_mode else "LIVE aktiv"
+            status_style = 'StatusBadgeSuccess.TLabel' if self.bot.demo_mode else 'StatusBadgeAlert.TLabel'
+            self.trade_status_label.config(text=status_text, style=status_style)
         self.log_message(f"Modus geändert: {mode_text}")
 
     def start_bot(self):
@@ -989,6 +1619,11 @@ class TradingGUI:
             return
 
         self.bot_starting = True
+        self.status_label.config(text="Bot wird gestartet…")
+        if hasattr(self, 'status_indicator'):
+            self.status_indicator.config(text="Startet…", style='StatusBadge.TLabel')
+        if hasattr(self, 'status_meta_label'):
+            self.status_meta_label.config(text="Verbindung wird aufgebaut")
         if self.start_button:
             self.start_button.config(state='disabled')
 
@@ -1018,6 +1653,10 @@ class TradingGUI:
     def after_bot_started(self):
         """Aktionen nach erfolgreichem Start"""
         self.status_label.config(text="Bot läuft")
+        if hasattr(self, 'status_indicator'):
+            self.status_indicator.config(text="Live-Modus aktiv", style='StatusBadgeSuccess.TLabel')
+        if hasattr(self, 'status_meta_label'):
+            self.status_meta_label.config(text=f"Gestartet um {datetime.now().strftime('%H:%M')}")
         self.bot_starting = False
         if self.start_button:
             self.start_button.config(state='normal')
@@ -1048,6 +1687,10 @@ class TradingGUI:
     def after_bot_stopped(self):
         """Aktionen nach dem Stoppen"""
         self.status_label.config(text="Bot gestoppt")
+        if hasattr(self, 'status_indicator'):
+            self.status_indicator.config(text="Offline", style='StatusBadgeAlert.TLabel')
+        if hasattr(self, 'status_meta_label'):
+            self.status_meta_label.config(text="Bereit für Verbindung")
         self.bot_starting = False
         if self.start_button:
             self.start_button.config(state='normal')
@@ -1093,6 +1736,12 @@ class TradingGUI:
         self.bot.demo_mode = demo_mode
         if hasattr(self, 'demo_var'):
             self.demo_var.set(demo_mode)
+        if hasattr(self, 'trade_status_label'):
+            status_style = 'StatusBadgeSuccess.TLabel' if demo_mode else 'StatusBadgeAlert.TLabel'
+            self.trade_status_label.config(
+                text="Demo aktiv" if demo_mode else "LIVE aktiv",
+                style=status_style
+            )
 
     def log_message(self, message):
         """Log-Nachricht in GUI anzeigen"""
