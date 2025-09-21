@@ -402,6 +402,16 @@ class MultiChatTradingBot:
         self.demo_mode = True  # Immer mit Demo starten!
         self.pending_trade_updates: Dict[int, Dict] = {}
 
+        # Trading-Konfiguration / MT5
+        self.default_lot_size: float = 0.01
+        self.order_deviation: int = 20
+        self.mt5_login: Optional[str] = None
+        self.mt5_password: Optional[str] = None
+        self.mt5_server: Optional[str] = None
+        self.last_mt5_error: Optional[str] = None
+        self._mt5_initialized: bool = False
+        self._mt5_logged_in: bool = False
+
         # Zugangsdaten anwenden (falls vorhanden)
         self.update_credentials(api_id, api_hash, phone, session_name=session_name)
 
@@ -450,6 +460,139 @@ class MultiChatTradingBot:
                 self.api_hash,
                 loop=self.loop
             )
+
+    def update_trading_settings(self, trading_cfg: Optional[Dict]):
+        """Trading-spezifische Einstellungen übernehmen."""
+
+        trading_cfg = trading_cfg or {}
+
+        previous_credentials = (self.mt5_login, self.mt5_password, self.mt5_server)
+
+        lot_size_value = trading_cfg.get('default_lot_size', self.default_lot_size)
+        try:
+            self.default_lot_size = float(lot_size_value)
+        except (TypeError, ValueError):
+            self.default_lot_size = 0.01
+
+        deviation_value = trading_cfg.get('order_deviation', self.order_deviation)
+        try:
+            self.order_deviation = max(1, int(deviation_value))
+        except (TypeError, ValueError):
+            self.order_deviation = 20
+
+        self.mt5_login = trading_cfg.get('mt5_login') or None
+        self.mt5_password = trading_cfg.get('mt5_password') or None
+        self.mt5_server = trading_cfg.get('mt5_server') or None
+
+        new_credentials = (self.mt5_login, self.mt5_password, self.mt5_server)
+        if new_credentials != previous_credentials:
+            self._mt5_initialized = False
+            self._mt5_logged_in = False
+            if MT5_AVAILABLE:
+                try:
+                    mt5.shutdown()
+                except Exception:
+                    pass
+
+    def shutdown_mt5(self):
+        """MT5-Verbindung sauber trennen."""
+
+        if not MT5_AVAILABLE:
+            return
+
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        finally:
+            self._mt5_initialized = False
+            self._mt5_logged_in = False
+
+    def enforce_demo_mode(self, reason: str):
+        """LIVE-Modus deaktivieren und Benutzer informieren."""
+
+        was_live = not self.demo_mode
+        message = f"{reason} LIVE-Modus deaktiviert." if was_live else reason
+        self.log(message, "ERROR")
+        self.demo_mode = True
+        self._mt5_logged_in = False
+        self._mt5_initialized = False
+        if was_live:
+            self.send_message('DEMO_MODE_ENFORCED', {'reason': message})
+
+    def ensure_mt5_session(self) -> bool:
+        """Stellt sicher, dass MT5 initialisiert und eingeloggt ist."""
+
+        if not MT5_AVAILABLE:
+            self.last_mt5_error = "MetaTrader5-Bibliothek ist nicht verfügbar."
+            self.enforce_demo_mode(self.last_mt5_error)
+            return False
+
+        if not all([self.mt5_login, self.mt5_password, self.mt5_server]):
+            self.last_mt5_error = "MT5-Zugangsdaten sind unvollständig. Bitte Konfiguration prüfen."
+            self.enforce_demo_mode(self.last_mt5_error)
+            return False
+
+        need_initialize = not self._mt5_initialized
+        if not need_initialize:
+            try:
+                terminal_info = mt5.terminal_info()
+                if terminal_info is None or not getattr(terminal_info, 'connected', False):
+                    need_initialize = True
+            except Exception:
+                need_initialize = True
+
+        if need_initialize:
+            if not mt5.initialize():
+                code, description = mt5.last_error()
+                self.last_mt5_error = f"MT5-Initialisierung fehlgeschlagen ({code}): {description}"
+                self._mt5_initialized = False
+                self.enforce_demo_mode(self.last_mt5_error)
+                return False
+            self._mt5_initialized = True
+
+        try:
+            login_id = int(self.mt5_login) if self.mt5_login is not None else None
+        except (TypeError, ValueError):
+            self.last_mt5_error = "MT5-Login-ID ist ungültig."
+            self._mt5_logged_in = False
+            self.enforce_demo_mode(self.last_mt5_error)
+            return False
+
+        try:
+            account_info = mt5.account_info()
+        except Exception:
+            account_info = None
+
+        if account_info is None or getattr(account_info, 'login', None) != login_id:
+            if not mt5.login(login_id, password=self.mt5_password, server=self.mt5_server):
+                code, description = mt5.last_error()
+                self.last_mt5_error = f"MT5-Login fehlgeschlagen ({code}): {description}"
+                self._mt5_logged_in = False
+                self.enforce_demo_mode(self.last_mt5_error)
+                return False
+            self._mt5_logged_in = True
+        else:
+            self._mt5_logged_in = True
+
+        self.last_mt5_error = None
+        return True
+
+    def enable_live_mode(self) -> Optional[str]:
+        """Versucht den LIVE-Modus zu aktivieren."""
+
+        if not MT5_AVAILABLE:
+            reason = "MetaTrader5-Bibliothek ist nicht verfügbar. Bitte installieren Sie MetaTrader 5."
+            self.last_mt5_error = reason
+            self.enforce_demo_mode(reason)
+            return reason
+
+        if not self.ensure_mt5_session():
+            return self.last_mt5_error or "MT5-Verbindung konnte nicht hergestellt werden."
+
+        self.demo_mode = False
+        self.log("LIVE-Modus aktiviert. MT5-Verbindung hergestellt.", "INFO")
+        return None
 
     async def ensure_connected(self) -> bool:
         """Stellt sicher, dass der Telegram-Client verbunden ist."""
@@ -680,49 +823,214 @@ class MultiChatTradingBot:
     async def execute_signal(self, signal: Dict, chat_source: ChatSource, original_message: str):
         """Signal ausführen (Demo oder Live)"""
         try:
-            if self.demo_mode or not MT5_AVAILABLE:
-                stop_loss_value = signal.get('stop_loss')
-                stop_loss = float(stop_loss_value) if stop_loss_value is not None else 0.0
-                take_profits_raw = signal.get('take_profits') or []
-                normalized_tps = []
-                for tp in take_profits_raw:
-                    try:
-                        normalized_tps.append(float(tp))
-                    except (TypeError, ValueError):
-                        continue
-                take_profit = normalized_tps[0] if normalized_tps else (
-                    float(signal.get('take_profit', 0.0)) if signal.get('take_profit') else 0.0
-                )
+            stop_loss_value = signal.get('stop_loss')
+            stop_loss: Optional[float] = None
+            if stop_loss_value is not None:
+                try:
+                    stop_loss = float(stop_loss_value)
+                except (TypeError, ValueError):
+                    stop_loss = None
 
-                # Demo-Trade simulieren
+            take_profits_raw = signal.get('take_profits') or []
+            normalized_tps: List[float] = []
+            for tp in take_profits_raw:
+                try:
+                    normalized_tps.append(float(tp))
+                except (TypeError, ValueError):
+                    continue
+
+            fallback_tp_value = signal.get('take_profit')
+            fallback_tp = 0.0
+            if fallback_tp_value is not None:
+                try:
+                    fallback_tp = float(fallback_tp_value)
+                except (TypeError, ValueError):
+                    fallback_tp = 0.0
+
+            take_profit = normalized_tps[0] if normalized_tps else fallback_tp
+
+            lot_size_value = self.default_lot_size
+            try:
+                lot_size = float(lot_size_value)
+            except (TypeError, ValueError):
+                lot_size = 0.0
+
+            if self.demo_mode:
+                demo_lot = lot_size if lot_size > 0 else 0.01
+                demo_price = 1.0850 if 'EUR' in signal['symbol'] else 2660.00
                 demo_result = {
                     'ticket': f"DEMO_{int(datetime.now().timestamp())}",
                     'symbol': signal['symbol'],
                     'direction': signal['action'],
-                    'price': 1.0850 if 'EUR' in signal['symbol'] else 2660.00,
-                    'lot_size': 0.01,
-                    'stop_loss': stop_loss,
+                    'price': demo_price,
+                    'lot_size': demo_lot,
+                    'stop_loss': stop_loss or 0.0,
                     'take_profit': take_profit,
                     'take_profits': normalized_tps,
                     'status': 'executed',
                     'profit_loss': 0.0
                 }
 
-                # Trade zu Tracker hinzufügen
                 self.trade_tracker.add_trade(demo_result, chat_source, original_message)
 
                 self.log(f"DEMO-Trade ausgeführt: {signal['action']} {signal['symbol']} von {chat_source.chat_name}")
 
-                # GUI benachrichtigen
                 self.send_message('TRADE_EXECUTED', {
                     **demo_result,
                     'source': chat_source.chat_name,
                     'demo': True
                 })
                 return demo_result
+
+            if not self.ensure_mt5_session():
+                return None
+
+            if lot_size <= 0:
+                error_message = "Ungültige Lot-Größe in der Konfiguration. LIVE-Order wird nicht gesendet."
+                self.last_mt5_error = error_message
+                self.log(error_message, "ERROR")
+                return None
+
+            symbol = signal.get('symbol')
+            if not symbol:
+                error_message = "Signal ohne Symbol erhalten. Order wird übersprungen."
+                self.last_mt5_error = error_message
+                self.log(error_message, "ERROR")
+                return None
+            symbol = str(symbol).upper()
+
+            action = (signal.get('action') or '').upper()
+            if action not in {'BUY', 'SELL'}:
+                error_message = f"Unbekannte Order-Richtung '{action}'."
+                self.last_mt5_error = error_message
+                self.log(error_message, "ERROR")
+                return None
+
+            if not mt5.symbol_select(symbol, True):
+                code, description = mt5.last_error()
+                error_message = f"Symbol {symbol} konnte nicht aktiviert werden ({code}): {description}"
+                self.last_mt5_error = error_message
+                self.log(error_message, "ERROR")
+                return None
+
+            symbol_info = mt5.symbol_info(symbol)
+            if symbol_info is None:
+                error_message = f"Symbolinformationen für {symbol} sind nicht verfügbar."
+                self.last_mt5_error = error_message
+                self.log(error_message, "ERROR")
+                return None
+
+            tick = mt5.symbol_info_tick(symbol)
+            if not tick:
+                error_message = f"Keine Tick-Daten für {symbol} verfügbar."
+                self.last_mt5_error = error_message
+                self.log(error_message, "ERROR")
+                return None
+
+            if action == 'BUY':
+                order_type = mt5.ORDER_TYPE_BUY
+                price = getattr(tick, 'ask', 0.0)
             else:
-                # TODO: Echten MT5-Trade umsetzen
-                self.log("LIVE-Trading ist aktiv, aber noch nicht implementiert.", "WARNING")
+                order_type = mt5.ORDER_TYPE_SELL
+                price = getattr(tick, 'bid', 0.0)
+
+            if not price or price <= 0:
+                error_message = f"Ungültiger Preis für {symbol}."
+                self.last_mt5_error = error_message
+                self.log(error_message, "ERROR")
+                return None
+
+            digits = getattr(symbol_info, 'digits', 5)
+            exec_price = round(price, digits)
+            stop_loss_price = round(stop_loss, digits) if stop_loss is not None else 0.0
+            take_profit_price = round(take_profit, digits) if take_profit else 0.0
+
+            request = {
+                'action': mt5.TRADE_ACTION_DEAL,
+                'symbol': symbol,
+                'volume': lot_size,
+                'type': order_type,
+                'price': exec_price,
+                'sl': stop_loss_price,
+                'tp': take_profit_price,
+                'deviation': self.order_deviation,
+                'magic': 0,
+                'comment': f"Telegram: {chat_source.chat_name}",
+                'type_time': mt5.ORDER_TIME_GTC,
+                'type_filling': getattr(mt5, 'ORDER_FILLING_RETURN', getattr(mt5, 'ORDER_FILLING_IOC', 0))
+            }
+
+            try:
+                result = mt5.order_send(request)
+            except Exception as order_error:
+                error_message = f"MT5-Order fehlgeschlagen: {order_error}"
+                self.last_mt5_error = error_message
+                self.log(error_message, "ERROR")
+                return None
+
+            if result is None:
+                code, description = mt5.last_error()
+                error_message = f"Order konnte nicht gesendet werden ({code}): {description}"
+                self.last_mt5_error = error_message
+                self.log(error_message, "ERROR")
+                return None
+
+            success_retcodes = {
+                getattr(mt5, 'TRADE_RETCODE_DONE', None),
+                getattr(mt5, 'TRADE_RETCODE_PLACED', None),
+                getattr(mt5, 'TRADE_RETCODE_DONE_PARTIAL', None)
+            }
+            success_retcodes.discard(None)
+            connection_error_codes = {
+                getattr(mt5, 'TRADE_RETCODE_NO_CONNECTION', None),
+                getattr(mt5, 'TRADE_RETCODE_NOT_AUTHORIZED', None),
+                getattr(mt5, 'TRADE_RETCODE_INVALID_ACCOUNT', None)
+            }
+            connection_error_codes.discard(None)
+
+            if success_retcodes and result.retcode not in success_retcodes:
+                error_message = f"Order abgelehnt ({result.retcode}): {result.comment}"
+                self.last_mt5_error = error_message
+                if result.retcode in connection_error_codes:
+                    self.enforce_demo_mode(error_message)
+                else:
+                    self.log(error_message, "ERROR")
+                return None
+
+            execution_price = result.price if getattr(result, 'price', 0.0) else exec_price
+
+            order_ticket = getattr(result, 'order', 0)
+            if not order_ticket and hasattr(result, 'deal'):
+                order_ticket = getattr(result, 'deal')
+
+            live_result = {
+                'ticket': str(order_ticket),
+                'symbol': symbol,
+                'direction': action,
+                'price': execution_price,
+                'lot_size': lot_size,
+                'stop_loss': stop_loss_price,
+                'take_profit': take_profit_price,
+                'take_profits': normalized_tps,
+                'status': 'executed',
+                'profit_loss': 0.0
+            }
+
+            self.last_mt5_error = None
+
+            self.trade_tracker.add_trade(live_result, chat_source, original_message)
+
+            self.log(
+                f"LIVE-Trade ausgeführt: {action} {symbol} Ticket {live_result['ticket']} @ {execution_price}",
+                "INFO"
+            )
+
+            self.send_message('TRADE_EXECUTED', {
+                **live_result,
+                'source': chat_source.chat_name,
+                'demo': False
+            })
+            return live_result
 
         except Exception as e:
             self.log(f"Fehler bei Signal-Ausführung: {e}", "ERROR")
@@ -845,7 +1153,11 @@ class ConfigManager:
                 "default_lot_size": 0.01,
                 "max_spread_pips": 3.0,
                 "risk_percent": 2.0,
-                "max_trades_per_hour": 5
+                "max_trades_per_hour": 5,
+                "mt5_login": "",
+                "mt5_password": "",
+                "mt5_server": "",
+                "order_deviation": 20
             },
             "signals": {
                 "instant_trading_enabled": True,
@@ -1004,6 +1316,7 @@ class TradingGUI:
         self._auth_dialog_open = False
         self._last_auth_message: Optional[str] = None
         self._pending_auth_message: Optional[str] = None
+        self._updating_demo_var = False
 
         # Buttons (werden in create_widgets gesetzt)
         self.start_button: Optional[ttk.Button] = None
@@ -1584,12 +1897,38 @@ class TradingGUI:
 
     def toggle_demo_mode(self):
         """Demo-Modus umschalten"""
-        self.bot.demo_mode = self.demo_var.get()
-        mode_text = "Demo-Modus" if self.bot.demo_mode else "LIVE-Modus"
+        if self._updating_demo_var:
+            return
+
+        requested_demo = self.demo_var.get()
+
+        if requested_demo:
+            self.bot.demo_mode = True
+            if hasattr(self, 'trade_status_label'):
+                self.trade_status_label.config(text="Demo-Modus aktiv")
+            self.log_message("Modus geändert: Demo-Modus")
+            return
+
+        error_message = self.bot.enable_live_mode()
+        if error_message:
+            self._updating_demo_var = True
+            try:
+                self.demo_var.set(True)
+            finally:
+                self._updating_demo_var = False
+            self.bot.demo_mode = True
+            if hasattr(self, 'trade_status_label'):
+                self.trade_status_label.config(text="Demo-Modus aktiv")
+            try:
+                messagebox.showerror("LIVE-Modus nicht verfügbar", error_message)
+            except Exception:
+                pass
+            return
+
+        self.bot.demo_mode = False
         if hasattr(self, 'trade_status_label'):
-            status_text = "Demo-Modus aktiv" if self.bot.demo_mode else "LIVE-Modus aktiv"
-            self.trade_status_label.config(text=status_text)
-        self.log_message(f"Modus geändert: {mode_text}")
+            self.trade_status_label.config(text="LIVE-Modus aktiv")
+        self.log_message("Modus geändert: LIVE-Modus")
 
     def start_bot(self):
         """Bot starten"""
@@ -1643,6 +1982,7 @@ class TradingGUI:
                 future.result(timeout=10)
             except Exception:
                 pass
+        self.bot.shutdown_mt5()
         self.after_bot_stopped()
 
     def after_bot_stopped(self):
@@ -1669,6 +2009,34 @@ class TradingGUI:
                             0,
                             lambda msg=info_message: self.show_auth_required_dialog(msg)
                         )
+                    elif msg_type == 'DEMO_MODE_ENFORCED':
+                        reason_text = ''
+                        if isinstance(data, dict):
+                            reason_text = str(data.get('reason') or '')
+                        elif data is not None:
+                            reason_text = str(data)
+
+                        if hasattr(self, 'demo_var'):
+                            self._updating_demo_var = True
+                            try:
+                                self.demo_var.set(True)
+                            finally:
+                                self._updating_demo_var = False
+
+                        self.bot.demo_mode = True
+
+                        if hasattr(self, 'trade_status_label'):
+                            if reason_text:
+                                trimmed = reason_text if len(reason_text) <= 60 else f"{reason_text[:57]}..."
+                                self.trade_status_label.config(text=f"Demo-Modus aktiv – {trimmed}")
+                            else:
+                                self.trade_status_label.config(text="Demo-Modus aktiv")
+
+                        if reason_text:
+                            try:
+                                messagebox.showwarning("LIVE-Modus deaktiviert", reason_text)
+                            except Exception:
+                                pass
 
             except queue.Empty:
                 pass
@@ -1689,12 +2057,36 @@ class TradingGUI:
         )
 
         trading_cfg = config.get('trading', {})
-        demo_mode = bool(trading_cfg.get('demo_mode', True))
-        self.bot.demo_mode = demo_mode
+        self.bot.update_trading_settings(trading_cfg)
+
+        requested_demo = bool(trading_cfg.get('demo_mode', True))
+        live_error: Optional[str] = None
+
+        if requested_demo:
+            self.bot.demo_mode = True
+        else:
+            live_error = self.bot.enable_live_mode()
+            if live_error:
+                requested_demo = True
+                self.bot.demo_mode = True
+
         if hasattr(self, 'demo_var'):
-            self.demo_var.set(demo_mode)
+            self._updating_demo_var = True
+            try:
+                self.demo_var.set(requested_demo)
+            finally:
+                self._updating_demo_var = False
+
         if hasattr(self, 'trade_status_label'):
-            self.trade_status_label.config(text="Demo-Modus aktiv" if demo_mode else "LIVE-Modus aktiv")
+            self.trade_status_label.config(
+                text="Demo-Modus aktiv" if requested_demo else "LIVE-Modus aktiv"
+            )
+
+        if live_error:
+            try:
+                messagebox.showwarning("LIVE-Modus deaktiviert", live_error)
+            except Exception:
+                pass
 
     def log_message(self, message):
         """Log-Nachricht in GUI anzeigen"""
