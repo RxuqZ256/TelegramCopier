@@ -849,6 +849,78 @@ class ConfigManager:
 # ==================== GUI ====================
 
 
+class ApiCredentialDialog(simpledialog.Dialog):
+    """Dialog zum Abfragen der Telegram-API-Zugangsdaten."""
+
+    def __init__(self, parent: tk.Tk, current_values: Optional[Dict]):
+        self.current_values = current_values or {}
+        self.api_id_var = tk.StringVar(value=str(self.current_values.get('api_id', "")))
+        self.api_hash_var = tk.StringVar(value=str(self.current_values.get('api_hash', "")))
+        self.phone_var = tk.StringVar(value=str(self.current_values.get('phone', "")))
+        self.result: Optional[Dict[str, str]] = None
+        self._validated_data: Optional[Dict[str, str]] = None
+        super().__init__(parent, title="Telegram API Zugangsdaten")
+
+    def body(self, master):  # type: ignore[override]
+        master.columnconfigure(1, weight=1)
+
+        ttk.Label(
+            master,
+            text=(
+                "Bitte geben Sie die Telegram API-Zugangsdaten ein, bevor der Bot gestartet wird.\n"
+                "Diese Informationen erhalten Sie unter https://my.telegram.org."
+            ),
+            wraplength=420,
+            justify='left'
+        ).grid(row=0, column=0, columnspan=2, sticky='w', padx=10, pady=(10, 12))
+
+        ttk.Label(master, text="API ID:").grid(row=1, column=0, sticky='e', padx=(10, 5), pady=(0, 8))
+        api_id_entry = ttk.Entry(master, textvariable=self.api_id_var)
+        api_id_entry.grid(row=1, column=1, sticky='we', padx=(0, 10), pady=(0, 8))
+
+        ttk.Label(master, text="API Hash:").grid(row=2, column=0, sticky='e', padx=(10, 5), pady=(0, 8))
+        api_hash_entry = ttk.Entry(master, textvariable=self.api_hash_var, show='*')
+        api_hash_entry.grid(row=2, column=1, sticky='we', padx=(0, 10), pady=(0, 8))
+
+        ttk.Label(master, text="Telefonnummer (+49...):").grid(row=3, column=0, sticky='e', padx=(10, 5), pady=(0, 8))
+        phone_entry = ttk.Entry(master, textvariable=self.phone_var)
+        phone_entry.grid(row=3, column=1, sticky='we', padx=(0, 10), pady=(0, 12))
+
+        return api_id_entry
+
+    def validate(self) -> bool:  # type: ignore[override]
+        api_id = (self.api_id_var.get() or "").strip()
+        api_hash = (self.api_hash_var.get() or "").strip()
+        phone = (self.phone_var.get() or "").strip()
+
+        if not api_id or not api_hash or not phone:
+            messagebox.showerror(
+                "Fehlende Angaben",
+                "Bitte füllen Sie alle Felder aus, um den Bot zu starten.",
+                parent=self
+            )
+            return False
+
+        if not api_id.isdigit():
+            messagebox.showerror(
+                "Ungültige API ID",
+                "Die API ID darf nur Ziffern enthalten.",
+                parent=self
+            )
+            return False
+
+        self._validated_data = {
+            'api_id': api_id,
+            'api_hash': api_hash,
+            'phone': phone
+        }
+        return True
+
+    def apply(self):  # type: ignore[override]
+        if self._validated_data:
+            self.result = self._validated_data
+
+
 class AuthCodeDialog(simpledialog.Dialog):
     """Einfache Dialogbox zur Eingabe des Telegram-Login-Codes."""
 
@@ -1774,6 +1846,30 @@ def show_startup_warning() -> bool:
     return result
 
 
+def prompt_for_api_credentials(config_manager: ConfigManager, config: Optional[Dict] = None) -> bool:
+    """Fragt die Telegram-API-Zugangsdaten ab und speichert sie."""
+
+    config = config or config_manager.load_config()
+    telegram_cfg = config.get('telegram', {})
+
+    root = tk.Tk()
+    root.withdraw()
+
+    try:
+        dialog = ApiCredentialDialog(root, telegram_cfg)
+        credentials = getattr(dialog, 'result', None)
+    finally:
+        root.destroy()
+
+    if not credentials:
+        return False
+
+    telegram_cfg.update(credentials)
+    config['telegram'] = telegram_cfg
+    config_manager.save_config(config)
+    return True
+
+
 # ==================== MAIN ====================
 
 def main():
@@ -1783,6 +1879,8 @@ def main():
         return
 
     try:
+        config_manager = ConfigManager()
+
         if check_first_run():
             root = tk.Tk()
             root.withdraw()
@@ -1796,7 +1894,11 @@ def main():
                 return
 
         # Konfiguration laden und auf Bot anwenden
-        cfg = ConfigManager().load_config()
+        if not prompt_for_api_credentials(config_manager):
+            print("Keine API-Zugangsdaten eingegeben. Anwendung wird beendet.")
+            return
+
+        cfg = config_manager.load_config()
         app = TradingGUI(cfg)
         app.run()
 
