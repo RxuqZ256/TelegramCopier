@@ -381,11 +381,13 @@ class SignalProcessor:
 class MultiChatTradingBot:
     """Haupt-Bot mit Multi-Chat-Unterstützung"""
 
-    def __init__(self, api_id: str, api_hash: str, phone: str):
+    def __init__(self, api_id: str, api_hash: str, phone: str, session_name: str = "trading_session"):
         # Credentials
         self.api_id = 0
         self.api_hash = ""
         self.phone = ""
+        self.session_name = session_name or "trading_session"
+        self.credentials_ready = False
 
         # Components
         self.chat_manager = MultiChatManager()
@@ -394,6 +396,9 @@ class MultiChatTradingBot:
 
         # Telegram Client (erst erstellen, wenn gültige Daten vorhanden sind)
         self.client: Optional[TelegramClient] = None
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self._runner_task: Optional[asyncio.Task] = None
+        self._handler_registered = False
         self.update_credentials(api_id, api_hash, phone)
 
         # Message Queue für GUI
@@ -405,51 +410,69 @@ class MultiChatTradingBot:
         self.pending_trade_updates: Dict[int, Dict] = {}
 
     def update_credentials(self, api_id: str, api_hash: str, phone: str):
-        """Telegram-Zugangsdaten aktualisieren und Client vorbereiten"""
+        """Telegram-Zugangsdaten aktualisieren und vorhandene Sessions schließen."""
 
-        # Vorherigen Client sauber schließen
-        if self.client:
+        clean_id = str(api_id or "").strip()
+        self.api_id = int(clean_id) if clean_id.isdigit() else 0
+        self.api_hash = (api_hash or "").strip()
+        self.phone = (phone or "").strip()
+        self.credentials_ready = bool(self.api_id and self.api_hash and self.phone)
+
+        if self.client and self.loop and self.loop.is_running():
             try:
-                self.client.disconnect()
+                asyncio.run_coroutine_threadsafe(self.client.disconnect(), self.loop)
+            except Exception:
+                pass
+
+        if self._runner_task and not self._runner_task.done():
+            try:
+                self._runner_task.cancel()
             except Exception:
                 pass
 
         self.client = None
-        self.api_id = int(api_id) if str(api_id).isdigit() else 0
-        self.api_hash = api_hash or ""
-        self.phone = phone or ""
+        self._runner_task = None
+        self._handler_registered = False
 
-        if self.api_id and self.api_hash:
-            self.client = TelegramClient('trading_session', self.api_id, self.api_hash)
+    def has_valid_credentials(self) -> bool:
+        return self.credentials_ready
 
     def has_active_client(self) -> bool:
-        return self.client is not None
+        return self.client is not None and self.is_running
 
     async def start(self):
         """Bot starten"""
-        if not self.client:
+        if not self.credentials_ready:
             self.log("Telegram-Zugangsdaten fehlen. Bitte zuerst verbinden.", "ERROR")
             return
 
         try:
+            loop = asyncio.get_running_loop()
+            self.loop = loop
+
+            if self.client is None:
+                self.client = TelegramClient(self.session_name, self.api_id, self.api_hash, loop=loop)
+                self._handler_registered = False
+
+            if not self._handler_registered:
+                self.client.add_event_handler(self.handle_new_message, events.NewMessage)
+                self._handler_registered = True
+
             await self.client.connect()
 
             if not await self.client.is_user_authorized():
                 await self.client.send_code_request(self.phone)
                 # Code-Eingabe sollte über GUI / Telethon auth erfolgen
 
-            @self.client.on(events.NewMessage)
-            async def message_handler(event):
-                await self.handle_new_message(event)
-
             self.is_running = True
             self.log("Bot gestartet - Multi-Chat-Modus aktiv")
 
             # Client im Hintergrund laufen lassen
-            asyncio.create_task(self.client.run_until_disconnected())
+            self._runner_task = asyncio.create_task(self.client.run_until_disconnected())
 
         except Exception as e:
             self.log(f"Fehler beim Starten: {e}", "ERROR")
+            self.is_running = False
 
     async def handle_new_message(self, event):
         """Neue Nachricht verarbeiten"""
@@ -595,7 +618,7 @@ class MultiChatTradingBot:
 
     async def load_all_chats(self):
         """Alle verfügbaren Chats laden"""
-        if not self.client:
+        if not self.client or not self.is_running:
             self.log("Keine Telegram-Verbindung. Bitte Zugangsdaten hinterlegen und verbinden.", "ERROR")
             return []
 
@@ -627,6 +650,32 @@ class MultiChatTradingBot:
             self.message_queue.put((msg_type, data), block=False)
         except queue.Full:
             pass
+
+    async def shutdown(self):
+        """Client sauber stoppen"""
+        self.is_running = False
+
+        if self._runner_task:
+            try:
+                self._runner_task.cancel()
+                await self._runner_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+            finally:
+                self._runner_task = None
+
+        if self.client:
+            try:
+                await self.client.disconnect()
+            except Exception:
+                pass
+            finally:
+                self.client = None
+                self._handler_registered = False
+
+        self.loop = None
 
 
 # ==================== KONFIGURATION ====================
@@ -730,14 +779,16 @@ class TradingGUI:
         api_id = str(telegram_cfg.get('api_id') or "")
         api_hash = telegram_cfg.get('api_hash', "")
         phone = telegram_cfg.get('phone', "")
+        session_name = str(telegram_cfg.get('session_name') or "trading_session")
 
-        self.bot = MultiChatTradingBot(api_id or "0", api_hash, phone)
+        self.bot = MultiChatTradingBot(api_id or "0", api_hash, phone, session_name=session_name)
         self.bot.demo_mode = bool(trading_cfg.get('demo_mode', True))
 
         self.metric_vars: Dict[str, tk.StringVar] = {}
         self.nav_buttons: Dict[str, ttk.Button] = {}
         self.pages: Dict[str, ttk.Frame] = {}
         self.app_initialized = False
+        self.bot_loop: Optional[asyncio.AbstractEventLoop] = None
 
         self.configure_style()
         self.build_start_screen()
@@ -1257,8 +1308,12 @@ class TradingGUI:
                 self.trades_tree.delete(item)
 
     def start_bot(self):
-        if not self.bot.has_active_client():
-            messagebox.showerror("Keine Zugangsdaten", "Bitte hinterlege eine gültige App ID und API Hash, bevor der Bot gestartet wird.")
+        if self.bot.is_running:
+            messagebox.showinfo("Bot aktiv", "Der Bot läuft bereits.")
+            return
+
+        if not self.bot.has_valid_credentials():
+            messagebox.showerror("Keine Zugangsdaten", "Bitte hinterlege eine gültige App ID, API Hash und Telefonnummer, bevor der Bot gestartet wird.")
             self.update_status_bar("Bot konnte nicht gestartet werden - fehlende Zugangsdaten")
             return
 
@@ -1267,13 +1322,23 @@ class TradingGUI:
         def run_bot():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
+            self.bot_loop = loop
             try:
                 loop.run_until_complete(self.bot.start())
-                self.root.after(0, self.after_bot_started)
-                loop.run_forever()
+                if self.bot.is_running:
+                    self.root.after(0, self.after_bot_started)
+                    loop.run_forever()
+                else:
+                    self.root.after(0, lambda: self.update_status_bar("Bot konnte nicht gestartet werden."))
             except Exception as e:
                 self.root.after(0, lambda: self.append_log(f"Bot-Start-Fehler: {e}"))
+                self.root.after(0, lambda: self.update_status_bar("Bot konnte nicht gestartet werden."))
             finally:
+                try:
+                    loop.run_until_complete(self.bot.shutdown())
+                except Exception:
+                    pass
+                self.bot_loop = None
                 loop.close()
 
         threading.Thread(target=run_bot, daemon=True).start()
@@ -1285,36 +1350,49 @@ class TradingGUI:
             self.connection_badge.configure(style="StatusOk.TLabel")
 
     def stop_bot(self):
-        self.bot.is_running = False
-        try:
-            if self.bot.client:
-                self.bot.client.disconnect()
-        except Exception:
-            pass
-        self.update_status_bar("Bot gestoppt")
-        if hasattr(self, 'connection_badge'):
-            self.connection_status_var.set("Getrennt")
-            self.connection_badge.configure(style="StatusWarn.TLabel")
+        loop = self.bot_loop
+        if not loop or not loop.is_running():
+            self.after_bot_stopped()
+            return
+
+        self.update_status_bar("Bot wird gestoppt...")
+
+        async def _shutdown():
+            await self.bot.shutdown()
+            loop.stop()
+
+        future = asyncio.run_coroutine_threadsafe(_shutdown(), loop)
+
+        def _on_done(_):
+            self.root.after(0, self.after_bot_stopped)
+
+        future.add_done_callback(_on_done)
 
     def load_chats(self):
-        if not self.bot.has_active_client():
+        loop = self.bot_loop
+        if not self.bot.is_running or not loop or not loop.is_running():
             messagebox.showerror("Keine Verbindung", "Ohne gültige Telegram-Verbindung können keine Chats geladen werden.")
             return
 
         self.update_status_bar("Chats werden geladen...")
 
-        def run_async():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        future = asyncio.run_coroutine_threadsafe(self.bot.load_all_chats(), loop)
+
+        def _handle_result(fut):
             try:
-                chats = loop.run_until_complete(self.bot.load_all_chats())
+                chats = fut.result()
                 self.root.after(0, lambda: self.update_chat_list(chats))
             except Exception as e:
                 self.root.after(0, lambda: self.append_log(f"Fehler beim Laden: {e}"))
-            finally:
-                loop.close()
 
-        threading.Thread(target=run_async, daemon=True).start()
+        future.add_done_callback(_handle_result)
+
+    def after_bot_stopped(self):
+        self.bot.is_running = False
+        self.update_status_bar("Bot gestoppt")
+        if hasattr(self, 'connection_badge'):
+            self.connection_status_var.set("Getrennt")
+            self.connection_badge.configure(style="StatusWarn.TLabel")
 
     def update_chat_list(self, chats_data):
         if not hasattr(self, 'chats_tree'):
