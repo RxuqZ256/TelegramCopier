@@ -17,7 +17,7 @@ from typing import Optional, Dict, List, Awaitable
 
 # ---- optionale Abhängigkeit: MetaTrader5 (nur für Windows verfügbar) ----
 try:
-    import MetaTrader5 as mt5  # noqa: F401
+    import MetaTrader5 as mt5
     MT5_AVAILABLE = True
 except Exception:
     MT5_AVAILABLE = False
@@ -461,6 +461,7 @@ class MultiChatTradingBot:
         self._mt5_initialized: bool = False
         self._mt5_login_ok: bool = False
         self._last_mt5_error: Optional[str] = None
+        self._mt5_account_info: Optional[Dict[str, str]] = None
 
         # Zugangsdaten anwenden (falls vorhanden)
         self.update_credentials(api_id, api_hash, phone, session_name=session_name)
@@ -1030,6 +1031,13 @@ class MultiChatTradingBot:
             }
 
             try:
+                self.log(
+                    (
+                        f"Sende Order an MT5: {direction} {symbol} "
+                        f"(Volumen {float(lot_size):.2f}, Preis {price:.5f})."
+                    ),
+                    "INFO"
+                )
                 result = mt5.order_send(request)
             except Exception as exc:
                 self.log(f"MT5-Order konnte nicht gesendet werden: {exc}", "ERROR")
@@ -1206,6 +1214,7 @@ class MultiChatTradingBot:
             self.mt5_path = None
             self._mt5_initialized = False
             self._mt5_login_ok = False
+            self._mt5_account_info = None
             self._last_mt5_error = "MetaTrader5 ist nicht installiert oder verfügbar."
             return
 
@@ -1218,6 +1227,7 @@ class MultiChatTradingBot:
         self.mt5_server = server or None
         self.mt5_path = path or None
         self._mt5_login_ok = False
+        self._mt5_account_info = None
         self._last_mt5_error = None
 
         if self._mt5_initialized:
@@ -1226,12 +1236,15 @@ class MultiChatTradingBot:
             except Exception:
                 pass
             self._mt5_initialized = False
+            self._mt5_account_info = None
 
     def ensure_mt5_session(self) -> bool:
         """Stellt sicher, dass eine aktive MT5-Session verfügbar ist."""
         self._last_mt5_error = None
 
         def handle_failure(message: str) -> bool:
+            self._mt5_login_ok = False
+            self._mt5_account_info = None
             self._last_mt5_error = message
             self.log(message, "ERROR")
             return False
@@ -1241,6 +1254,9 @@ class MultiChatTradingBot:
 
         if not self.mt5_login or not self.mt5_password or not self.mt5_server:
             return handle_failure("MT5-Zugangsdaten unvollständig. Bitte prüfen Sie Login, Passwort und Server.")
+
+        initialized_this_call = False
+        logged_in_this_call = False
 
         if self._mt5_initialized:
             try:
@@ -1264,6 +1280,7 @@ class MultiChatTradingBot:
                 message = f"MT5 konnte nicht initialisiert werden: {exc}"
                 return handle_failure(message)
             self._mt5_initialized = True
+            initialized_this_call = True
 
         try:
             account_info = mt5.account_info()
@@ -1283,16 +1300,40 @@ class MultiChatTradingBot:
                 account_info = mt5.account_info()
             except Exception:
                 account_info = None
+            else:
+                logged_in_this_call = True
 
         if not account_info or account_info.login != self.mt5_login:
             return handle_failure("MT5-Account konnte nicht bestätigt werden.")
 
+        if initialized_this_call:
+            self.log("MetaTrader 5 Terminal initialisiert.", "INFO")
+        if logged_in_this_call:
+            self.log(f"MT5-Login erfolgreich für Konto {self.mt5_login}.", "INFO")
+
+        summary = {
+            'login': str(getattr(account_info, 'login', self.mt5_login)),
+            'name': str(getattr(account_info, 'name', '') or ''),
+            'server': str(getattr(account_info, 'server', self.mt5_server or '') or ''),
+            'currency': str(getattr(account_info, 'currency', '') or ''),
+            'balance': f"{getattr(account_info, 'balance', 0.0):.2f}",
+            'equity': f"{getattr(account_info, 'equity', 0.0):.2f}",
+            'leverage': str(getattr(account_info, 'leverage', '') or '')
+        }
+
+        self._mt5_account_info = summary
         self._mt5_login_ok = True
         return True
 
     def get_last_mt5_error(self) -> Optional[str]:
         """Gibt die letzte MT5-Fehlermeldung zurück."""
         return self._last_mt5_error
+
+    def get_mt5_account_summary(self) -> Optional[Dict[str, str]]:
+        """Liefert zusammengefasste Informationen zur aktuellen MT5-Session."""
+        if not self._mt5_account_info:
+            return None
+        return dict(self._mt5_account_info)
 
 
 # ==================== KONFIGURATION ====================
@@ -2050,9 +2091,10 @@ class TradingGUI:
         header = ttk.Frame(mt5_tab, style='Main.TFrame')
         header.pack(fill='x')
         ttk.Label(header, text="MetaTrader 5 Anbindung", style='SectionTitle.TLabel').pack(side='left')
+        status_text = "Keine Verbindung getestet" if MT5_AVAILABLE else "MT5-Modul nicht installiert"
         self.mt5_status_label = ttk.Label(
             header,
-            text="Keine Verbindung getestet",
+            text=status_text,
             style='Info.TLabel'
         )
         self.mt5_status_label.pack(side='right')
@@ -2686,6 +2728,42 @@ class TradingGUI:
         self.log_text.insert('end', f"{message}\n")
         self.log_text.see('end')
 
+    def _format_mt5_summary(self, summary: Dict[str, str]) -> str:
+        """Formatiert die MT5-Kontoinformationen für Anzeigezwecke."""
+        lines: List[str] = []
+
+        login = summary.get('login')
+        if login:
+            line = f"Konto: {login}"
+            name = summary.get('name')
+            if name:
+                line = f"{line} – {name}"
+            lines.append(line)
+
+        server = summary.get('server')
+        if server:
+            lines.append(f"Server: {server}")
+
+        balance = summary.get('balance')
+        equity = summary.get('equity')
+        currency = summary.get('currency')
+        if balance:
+            balance_text = f"Balance: {balance}"
+            if currency:
+                balance_text = f"{balance_text} {currency}"
+            lines.append(balance_text)
+        if equity:
+            equity_text = f"Equity: {equity}"
+            if currency:
+                equity_text = f"{equity_text} {currency}"
+            lines.append(equity_text)
+
+        leverage = summary.get('leverage')
+        if leverage:
+            lines.append(f"Hebel: {leverage}")
+
+        return '\n'.join(lines)
+
     def _collect_mt5_form_data(self):
         """Liest die MT5-Formularwerte aus."""
         try:
@@ -2724,7 +2802,10 @@ class TradingGUI:
         if not silent:
             self.log_message("MT5-Zugangsdaten aktualisiert.")
             if hasattr(self, 'mt5_status_label'):
-                self.mt5_status_label.config(text="Zugangsdaten gespeichert")
+                if MT5_AVAILABLE:
+                    self.mt5_status_label.config(text="Zugangsdaten gespeichert")
+                else:
+                    self.mt5_status_label.config(text="MT5-Modul nicht installiert")
         return True
 
     def test_mt5_connection(self):
@@ -2755,8 +2836,29 @@ class TradingGUI:
         if success:
             message = "MT5-Verbindung erfolgreich aufgebaut."
             self.log_message(message)
+            summary = self.bot.get_mt5_account_summary()
+            summary_text = ""
+            if summary:
+                summary_text = self._format_mt5_summary(summary)
+                if summary_text:
+                    self.log_message(f"MT5-Kontoübersicht:\n{summary_text}")
+                    message = f"{message}\n\n{summary_text}"
             if hasattr(self, 'mt5_status_label'):
-                self.mt5_status_label.config(text="Verbindung aktiv")
+                status_text = "Verbindung aktiv"
+                if summary:
+                    balance = summary.get('balance')
+                    currency = summary.get('currency')
+                    login = summary.get('login')
+                    parts = []
+                    if login:
+                        parts.append(f"Konto {login}")
+                    if balance and currency:
+                        parts.append(f"Balance {balance} {currency}")
+                    elif balance:
+                        parts.append(f"Balance {balance}")
+                    if parts:
+                        status_text = "Aktiv: " + " – ".join(parts)
+                self.mt5_status_label.config(text=status_text)
             try:
                 messagebox.showinfo("Verbindung erfolgreich", message)
             except Exception:
