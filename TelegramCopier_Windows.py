@@ -928,12 +928,14 @@ class TradingGUI:
 class SetupAssistant:
     """Setup-Assistent für erste Konfiguration"""
 
-    def __init__(self):
+    def __init__(self, parent: tk.Tk):
+        self.parent = parent
         self.window = None
+        self.config_saved = False
 
     def show_setup_dialog(self):
         """Setup-Dialog anzeigen"""
-        self.window = tk.Toplevel()
+        self.window = tk.Toplevel(self.parent)
         self.window.title("Erste Einrichtung")
         self.window.geometry("600x500")
         self.window.grab_set()  # Modal
@@ -1027,7 +1029,10 @@ class SetupAssistant:
             config_manager = ConfigManager()
             config_manager.save_config(config)
             messagebox.showinfo("Erfolg", "Konfiguration gespeichert. Bitte starten Sie den Bot.")
+            self.config_saved = True
             self.window.destroy()
+            if self.parent:
+                self.parent.quit()
 
         except Exception as e:
             messagebox.showerror("Fehler", f"Konfigurationsfehler: {e}")
@@ -1036,6 +1041,8 @@ class SetupAssistant:
         """Setup abbrechen"""
         if messagebox.askyesno("Bestätigung", "Setup wirklich abbrechen?"):
             self.window.destroy()
+            if self.parent:
+                self.parent.quit()
 
 
 def check_first_run() -> bool:
@@ -1083,10 +1090,14 @@ def main():
         if check_first_run():
             root = tk.Tk()
             root.withdraw()
-            setup = SetupAssistant()
+            setup = SetupAssistant(root)
             setup.show_setup_dialog()
             root.mainloop()
             root.destroy()
+
+            if not setup.config_saved:
+                print("Setup abgebrochen. Anwendung wird beendet.")
+                return
 
         # Konfiguration laden und auf Bot anwenden
         cfg = ConfigManager().load_config()
