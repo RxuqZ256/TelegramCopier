@@ -886,14 +886,17 @@ class TradingGUI:
         self.root = tk.Tk()
         self.root.title("Multi-Chat Trading Bot (Windows)")
         self.root.geometry("1200x800")
+        self.root.minsize(1100, 720)
 
         # Style & Theme
+        self.theme_variant = 'modern_light'
+        self.theme_var = tk.StringVar(value='Modern Light')
         self.style = ttk.Style(self.root)
         try:
             self.style.theme_use('clam')
         except tk.TclError:
             pass
-        self._configure_styles()
+        self._configure_styles(self.theme_variant)
 
         # Bot-Instanz (setzt später Config/Setup)
         self.bot = MultiChatTradingBot(None, None, None)
@@ -904,89 +907,324 @@ class TradingGUI:
 
         # Buttons (werden in create_widgets gesetzt)
         self.start_button: Optional[ttk.Button] = None
+        self.theme_selector: Optional[ttk.Combobox] = None
 
         # GUI-Komponenten
         self.create_widgets()
         self.setup_message_processing()
 
+        self._apply_palette_to_widgets()
+
         if config:
             self.apply_config(config)
 
-    def _configure_styles(self):
+    def _configure_styles(self, variant: str = 'modern_light'):
         """Globale Styles, Farben und Schriftarten setzen."""
-        base_bg = '#f4f6fb'
-        surface_bg = '#ffffff'
-        accent_color = '#2f6bff'
-        text_color = '#1b2330'
-        subtle_text = '#5c6473'
+        self.palette = self._build_palette(variant)
+
+        base_bg = self.palette['base']
+        surface_bg = self.palette['surface']
+        surface_alt = self.palette['surface_alt']
+        accent_color = self.palette['accent']
+        accent_hover = self.palette['accent_hover']
+        accent_soft = self.palette['accent_soft']
+        accent_text = self.palette['accent_text']
+        text_color = self.palette['text']
+        subtle_text = self.palette['subtle_text']
+        border_color = self.palette['border']
+        danger_color = self.palette['danger']
+        on_accent = self.palette['on_accent']
 
         self.root.configure(bg=base_bg)
+        self.root.option_add('*Font', 'Segoe UI 10')
+        self.root.option_add('*TCombobox*Listbox.font', 'Segoe UI 10')
+        self.root.option_add('*TCombobox*Listbox.background', surface_bg)
+        self.root.option_add('*TCombobox*Listbox.foreground', text_color)
+        self.root.option_add('*TCombobox*Listbox.selectBackground', accent_color)
+        self.root.option_add('*TCombobox*Listbox.selectForeground', on_accent)
 
         self.style.configure('TFrame', background=base_bg)
-        self.style.configure('Header.TFrame', background=base_bg)
-        self.style.configure('Toolbar.TFrame', background=base_bg)
+        self.style.configure('Surface.TFrame', background=surface_bg)
+        self.style.configure('Header.TFrame', background=base_bg, padding=(0, 6, 0, 6))
+        self.style.configure('Toolbar.TFrame', background=surface_alt, padding=(12, 10))
+        self.style.configure('Status.TFrame', background=surface_alt, padding=(12, 10))
         self.style.configure('Metric.TFrame', background=surface_bg, relief='flat')
-        self.style.configure('Card.TLabelframe', background=surface_bg)
-        self.style.configure('Card.TLabelframe.Label', background=surface_bg, foreground=text_color, font=('Segoe UI Semibold', 11))
+        self.style.configure('Card.TLabelframe', background=surface_bg, bordercolor=border_color, borderwidth=1, relief='solid')
+        self.style.configure(
+            'Card.TLabelframe.Label',
+            background=surface_bg,
+            foreground=subtle_text,
+            font=('Segoe UI Semibold', 11)
+        )
 
-        self.style.configure('TNotebook', background=base_bg)
-        self.style.configure('TNotebook.Tab', font=('Segoe UI', 10, 'bold'), padding=(18, 10))
-        self.style.map('TNotebook.Tab', background=[('selected', surface_bg)], foreground=[('selected', text_color)])
+        self.style.configure('TNotebook', background=base_bg, borderwidth=0, tabmargins=(10, 6, 10, 0))
+        self.style.configure(
+            'TNotebook.Tab',
+            font=('Segoe UI Semibold', 11),
+            padding=(20, 10),
+            background=surface_alt,
+            foreground=subtle_text,
+            borderwidth=0
+        )
+        self.style.map(
+            'TNotebook.Tab',
+            background=[('selected', surface_bg), ('active', surface_bg)],
+            foreground=[('selected', text_color)]
+        )
 
         self.style.configure('TLabel', background=base_bg, foreground=text_color, font=('Segoe UI', 10))
-        self.style.configure('Title.TLabel', background=base_bg, foreground=text_color, font=('Segoe UI Semibold', 18))
+        self.style.configure('Title.TLabel', background=base_bg, foreground=text_color, font=('Segoe UI Semibold', 20))
         self.style.configure('Subtitle.TLabel', background=base_bg, foreground=subtle_text, font=('Segoe UI', 11))
         self.style.configure('SectionTitle.TLabel', background=base_bg, foreground=text_color, font=('Segoe UI Semibold', 14))
         self.style.configure('Info.TLabel', background=base_bg, foreground=subtle_text, font=('Segoe UI', 10))
         self.style.configure('FieldLabel.TLabel', background=base_bg, foreground=subtle_text, font=('Segoe UI', 10))
-        self.style.configure('Warning.TLabel', background=base_bg, foreground='#d8334a', font=('Segoe UI Semibold', 11))
+        self.style.configure('Warning.TLabel', background=base_bg, foreground=danger_color, font=('Segoe UI Semibold', 11))
+        self.style.configure('Status.TLabel', background=surface_alt, foreground=subtle_text, font=('Segoe UI', 10))
         self.style.configure('MetricTitle.TLabel', background=surface_bg, foreground=subtle_text, font=('Segoe UI', 10))
         self.style.configure('MetricValue.TLabel', background=surface_bg, foreground=text_color, font=('Segoe UI Semibold', 16))
+        self.style.configure('Badge.TLabel', background=accent_color, foreground=on_accent, font=('Segoe UI Semibold', 9), padding=(10, 2))
 
         self.style.configure('TButton', font=('Segoe UI', 10), padding=6)
-        self.style.configure('Accent.TButton', background=accent_color, foreground='#ffffff')
-        self.style.map('Accent.TButton', background=[('active', '#1c4fd9')], foreground=[('disabled', '#c8d3f9')])
-        self.style.configure('Toolbar.TButton', background=surface_bg, foreground=text_color)
-        self.style.map('Toolbar.TButton', background=[('active', '#e6edff')])
+        self.style.configure(
+            'Accent.TButton',
+            background=accent_color,
+            foreground=on_accent,
+            font=('Segoe UI Semibold', 10),
+            padding=(16, 8)
+        )
+        self.style.map(
+            'Accent.TButton',
+            background=[('pressed', accent_hover), ('active', accent_hover), ('disabled', surface_alt)],
+            foreground=[('disabled', subtle_text), ('!disabled', on_accent)]
+        )
+        self.style.configure(
+            'Ghost.TButton',
+            background=surface_alt,
+            foreground=text_color,
+            padding=(14, 6)
+        )
+        self.style.map(
+            'Ghost.TButton',
+            background=[('pressed', surface_bg), ('active', surface_bg)],
+            foreground=[('disabled', subtle_text)]
+        )
+        self.style.configure(
+            'Toolbar.TButton',
+            background=surface_bg,
+            foreground=text_color,
+            padding=(14, 6)
+        )
+        self.style.map(
+            'Toolbar.TButton',
+            background=[('pressed', accent_soft), ('active', accent_soft)],
+            foreground=[('disabled', subtle_text)]
+        )
         self.style.configure('Link.TButton', background=base_bg, foreground=accent_color, padding=0)
-        self.style.map('Link.TButton', foreground=[('active', '#1c4fd9')])
+        self.style.map('Link.TButton', foreground=[('active', accent_hover)])
 
-        self.style.configure('Treeview', background=surface_bg, fieldbackground=surface_bg, foreground=text_color, font=('Segoe UI', 10))
+        self.style.configure(
+            'TEntry',
+            fieldbackground=surface_bg,
+            background=surface_bg,
+            foreground=text_color,
+            insertcolor=accent_color,
+            bordercolor=border_color
+        )
+        self.style.map(
+            'TEntry',
+            fieldbackground=[('disabled', surface_alt)],
+            foreground=[('disabled', subtle_text)]
+        )
+        self.style.configure(
+            'TCombobox',
+            fieldbackground=surface_bg,
+            background=surface_bg,
+            foreground=text_color,
+            bordercolor=border_color
+        )
+        self.style.map(
+            'TCombobox',
+            fieldbackground=[('readonly', surface_bg), ('disabled', surface_alt)],
+            foreground=[('disabled', subtle_text)]
+        )
+
+        self.style.configure(
+            'Treeview',
+            background=surface_bg,
+            fieldbackground=surface_bg,
+            foreground=text_color,
+            font=('Segoe UI', 10),
+            bordercolor=border_color,
+            rowheight=26
+        )
         self.style.configure(
             'Treeview.Heading',
-            background=accent_color,
-            foreground='#ffffff',
+            background=surface_alt,
+            foreground=subtle_text,
             font=('Segoe UI Semibold', 10),
-            padding=6
+            padding=6,
+            relief='flat'
+        )
+        self.style.map(
+            'Treeview.Heading',
+            background=[('active', accent_color)],
+            foreground=[('active', on_accent)]
         )
         self.style.configure('Dashboard.Treeview', rowheight=26)
-        self.style.map('Treeview', background=[('selected', '#d8e4ff')])
+        self.style.map(
+            'Treeview',
+            background=[('selected', accent_soft)],
+            foreground=[('selected', accent_text)]
+        )
+
+        self.style.configure('Vertical.TScrollbar', background=surface_alt, troughcolor=surface_bg, bordercolor=surface_alt)
+        self.style.map('Vertical.TScrollbar', background=[('active', surface_bg)])
+        self.style.configure('Horizontal.TScrollbar', background=surface_alt, troughcolor=surface_bg, bordercolor=surface_alt)
+        self.style.map('Horizontal.TScrollbar', background=[('active', surface_bg)])
 
         self.style.configure('TCheckbutton', background=base_bg, foreground=text_color, font=('Segoe UI', 10))
         self.style.configure('Switch.TCheckbutton', background=base_bg, foreground=text_color, font=('Segoe UI', 10, 'bold'))
+
+        self.theme_variant = variant
+
+    def _build_palette(self, variant: str) -> Dict[str, str]:
+        """Farbpaletten für helle und dunkle Darstellung."""
+        if variant == 'modern_dark':
+            return {
+                'base': '#0f172a',
+                'surface': '#1e293b',
+                'surface_alt': '#15213b',
+                'accent': '#3b82f6',
+                'accent_hover': '#2563eb',
+                'accent_soft': '#1d4ed8',
+                'accent_text': '#f8fafc',
+                'text': '#e2e8f0',
+                'subtle_text': '#94a3b8',
+                'border': '#1f2a44',
+                'danger': '#f87171',
+                'on_accent': '#ffffff',
+                'log_bg': '#0b1120',
+                'log_fg': '#f8fafc'
+            }
+
+        return {
+            'base': '#f5f7fb',
+            'surface': '#ffffff',
+            'surface_alt': '#eef1f8',
+            'accent': '#2f6bff',
+            'accent_hover': '#1c4fd9',
+            'accent_soft': '#dbe4ff',
+            'accent_text': '#1b2330',
+            'text': '#1b2330',
+            'subtle_text': '#5c6473',
+            'border': '#d7dcea',
+            'danger': '#d8334a',
+            'on_accent': '#ffffff',
+            'log_bg': '#10131a',
+            'log_fg': '#f7f9fc'
+        }
+
+    def _apply_palette_to_widgets(self):
+        """Aktuelle Farbpalette auf bestehende Widgets anwenden."""
+        if not hasattr(self, 'palette'):
+            return
+
+        self.root.configure(bg=self.palette['base'])
+
+        if hasattr(self, 'main_frame'):
+            self.main_frame.configure(style='Surface.TFrame')
+        if hasattr(self, 'header_frame'):
+            self.header_frame.configure(style='Header.TFrame')
+        if hasattr(self, 'status_frame'):
+            self.status_frame.configure(style='Status.TFrame')
+        if hasattr(self, 'status_label'):
+            self.status_label.configure(style='Status.TLabel')
+        if hasattr(self, 'chat_summary_label'):
+            self.chat_summary_label.configure(style='Info.TLabel')
+        if hasattr(self, 'trade_status_label'):
+            self.trade_status_label.configure(style='Info.TLabel')
+        if hasattr(self, 'statistics_hint'):
+            self.statistics_hint.configure(style='Info.TLabel')
+        if self.start_button is not None:
+            self.start_button.configure(style='Accent.TButton')
+        if hasattr(self, 'theme_selector') and self.theme_selector is not None:
+            self.theme_selector.configure(style='TCombobox')
+        if hasattr(self, 'notebook'):
+            self.notebook.configure(style='TNotebook')
+
+        if hasattr(self, 'log_text') and self.log_text is not None:
+            self.log_text.configure(
+                bg=self.palette['log_bg'],
+                fg=self.palette['log_fg'],
+                insertbackground=self.palette['log_fg'],
+                highlightbackground=self.palette['border'],
+                highlightcolor=self.palette['border'],
+                highlightthickness=1,
+                borderwidth=0,
+                relief='flat'
+            )
+
+    def on_theme_change(self, _event=None):
+        """Theme-Auswahl aus dem Dropdown anwenden."""
+        selection = (self.theme_var.get() or '').lower()
+        variant = 'modern_dark' if 'dark' in selection or 'dunkel' in selection else 'modern_light'
+        if variant != self.theme_variant:
+            self._configure_styles(variant)
+            self._apply_palette_to_widgets()
 
     def create_widgets(self):
         """GUI-Widgets erstellen"""
 
         # Main Container
-        self.main_frame = ttk.Frame(self.root, padding=(20, 20, 20, 15))
+        self.main_frame = ttk.Frame(self.root, padding=(20, 20, 20, 15), style='Surface.TFrame')
         self.main_frame.pack(fill='both', expand=True)
 
         # Header
         header_frame = ttk.Frame(self.main_frame, style='Header.TFrame')
         header_frame.pack(fill='x', pady=(0, 15))
+        header_frame.columnconfigure(0, weight=1)
+        header_frame.columnconfigure(1, weight=0)
+        self.header_frame = header_frame
+
+        title_container = ttk.Frame(header_frame, style='Header.TFrame')
+        title_container.grid(row=0, column=0, sticky='w')
 
         ttk.Label(
-            header_frame,
+            title_container,
             text="📊 Multi-Chat Trading Cockpit",
             style='Title.TLabel'
         ).pack(side='left')
 
         ttk.Label(
-            header_frame,
+            title_container,
             text="Synchronisiere Signale & verwalte Quellen in Echtzeit",
             style='Subtitle.TLabel'
         ).pack(side='left', padx=(18, 0))
+
+        ttk.Label(
+            title_container,
+            text="Modern UI",
+            style='Badge.TLabel'
+        ).pack(side='left', padx=(18, 0))
+
+        controls_container = ttk.Frame(header_frame, style='Header.TFrame')
+        controls_container.grid(row=0, column=1, sticky='e')
+
+        ttk.Label(
+            controls_container,
+            text="Darstellung",
+            style='Info.TLabel'
+        ).pack(side='left', padx=(0, 8))
+
+        self.theme_selector = ttk.Combobox(
+            controls_container,
+            textvariable=self.theme_var,
+            values=['Modern Light', 'Modern Dark'],
+            state='readonly',
+            width=16
+        )
+        self.theme_selector.pack(side='left')
+        self.theme_selector.bind('<<ComboboxSelected>>', self.on_theme_change)
 
         # Notebook-Tabs
         self.notebook = ttk.Notebook(self.main_frame)
@@ -997,13 +1235,13 @@ class TradingGUI:
         self.create_statistics_tab()
 
         # Status Bar
-        self.status_frame = ttk.Frame(self.main_frame)
+        self.status_frame = ttk.Frame(self.main_frame, style='Status.TFrame')
         self.status_frame.pack(fill='x', pady=(10, 0))
 
-        self.status_label = ttk.Label(self.status_frame, text="Bot gestoppt")
+        self.status_label = ttk.Label(self.status_frame, text="Bot gestoppt", style='Status.TLabel')
         self.status_label.pack(side='left')
 
-        button_frame = ttk.Frame(self.status_frame)
+        button_frame = ttk.Frame(self.status_frame, style='Status.TFrame')
         button_frame.pack(side='right')
 
         self.start_button = ttk.Button(
@@ -1013,14 +1251,19 @@ class TradingGUI:
             style='Accent.TButton'
         )
         self.start_button.pack(side='left', padx=(0, 8))
-        ttk.Button(button_frame, text="■ Bot stoppen", command=self.stop_bot).pack(side='left')
+        ttk.Button(
+            button_frame,
+            text="■ Bot stoppen",
+            command=self.stop_bot,
+            style='Ghost.TButton'
+        ).pack(side='left')
 
     def create_chat_management_tab(self):
         """Chat-Management Tab"""
-        chat_frame = ttk.Frame(self.notebook, padding=(20, 20, 20, 15))
+        chat_frame = ttk.Frame(self.notebook, padding=(20, 20, 20, 15), style='Surface.TFrame')
         self.notebook.add(chat_frame, text="Chat Management")
 
-        header = ttk.Frame(chat_frame)
+        header = ttk.Frame(chat_frame, style='Surface.TFrame')
         header.pack(fill='x')
         ttk.Label(header, text="Chat-Quellen", style='SectionTitle.TLabel').pack(side='left')
         self.chat_summary_label = ttk.Label(header, text="Keine Chats geladen", style='Info.TLabel')
@@ -1096,7 +1339,7 @@ class TradingGUI:
             self.chats_tree.heading(col, text=heading_texts.get(col, col))
             self.chats_tree.column(col, width=column_widths.get(col, 120), anchor='w')
 
-        info_frame = ttk.Frame(chat_frame)
+        info_frame = ttk.Frame(chat_frame, style='Surface.TFrame')
         info_frame.pack(fill='x', pady=(12, 0))
         ttk.Label(
             info_frame,
@@ -1115,16 +1358,16 @@ class TradingGUI:
 
     def create_trading_tab(self):
         """Trading Tab"""
-        trading_frame = ttk.Frame(self.notebook, padding=(20, 20, 20, 15))
+        trading_frame = ttk.Frame(self.notebook, padding=(20, 20, 20, 15), style='Surface.TFrame')
         self.notebook.add(trading_frame, text="Trading")
 
-        header = ttk.Frame(trading_frame)
+        header = ttk.Frame(trading_frame, style='Surface.TFrame')
         header.pack(fill='x')
         ttk.Label(header, text="Trading-Steuerung", style='SectionTitle.TLabel').pack(side='left')
         self.trade_status_label = ttk.Label(header, text="Demo aktiv", style='Info.TLabel')
         self.trade_status_label.pack(side='right')
 
-        settings_frame = ttk.Frame(trading_frame)
+        settings_frame = ttk.Frame(trading_frame, style='Surface.TFrame')
         settings_frame.pack(fill='x', pady=(15, 12))
         settings_frame.columnconfigure((0, 1, 2), weight=1)
 
@@ -1159,7 +1402,7 @@ class TradingGUI:
         ttk.Button(toolbar, text="🧹 Log leeren", style='Toolbar.TButton', command=self.clear_log).pack(side='left', padx=(10, 0))
         ttk.Button(toolbar, text="📊 Statistiken", style='Toolbar.TButton', command=self.refresh_statistics).pack(side='left', padx=(10, 0))
 
-        metrics_frame = ttk.Frame(trading_frame)
+        metrics_frame = ttk.Frame(trading_frame, style='Surface.TFrame')
         metrics_frame.pack(fill='x', pady=(0, 15))
         metrics_frame.columnconfigure((0, 1, 2), weight=1)
         for idx, (title, value) in enumerate([
@@ -1179,13 +1422,15 @@ class TradingGUI:
             log_frame,
             height=16,
             wrap='word',
-            bg='#10131a',
-            fg='#f7f9fc',
-            insertbackground='#f7f9fc',
+            bg=self.palette['log_bg'],
+            fg=self.palette['log_fg'],
+            insertbackground=self.palette['log_fg'],
             font=('Consolas', 11),
             borderwidth=0,
             relief='flat',
-            highlightthickness=0
+            highlightthickness=1,
+            highlightbackground=self.palette['border'],
+            highlightcolor=self.palette['border']
         )
         self.log_text.pack(side='left', fill='both', expand=True)
 
@@ -1195,16 +1440,16 @@ class TradingGUI:
 
     def create_statistics_tab(self):
         """Statistiken Tab"""
-        stats_frame = ttk.Frame(self.notebook, padding=(20, 20, 20, 15))
+        stats_frame = ttk.Frame(self.notebook, padding=(20, 20, 20, 15), style='Surface.TFrame')
         self.notebook.add(stats_frame, text="Statistiken")
 
-        header = ttk.Frame(stats_frame)
+        header = ttk.Frame(stats_frame, style='Surface.TFrame')
         header.pack(fill='x')
         ttk.Label(header, text="Performance & Statistiken", style='SectionTitle.TLabel').pack(side='left')
         self.statistics_hint = ttk.Label(header, text="Letzte Aktualisierung: –", style='Info.TLabel')
         self.statistics_hint.pack(side='right')
 
-        kpi_frame = ttk.Frame(stats_frame)
+        kpi_frame = ttk.Frame(stats_frame, style='Surface.TFrame')
         kpi_frame.pack(fill='x', pady=(15, 15))
         kpi_frame.columnconfigure((0, 1, 2), weight=1)
         for idx, (title, value) in enumerate([
@@ -1249,7 +1494,7 @@ class TradingGUI:
             self.stats_tree.heading(col, text=heading_texts.get(col, col))
             self.stats_tree.column(col, width=column_widths.get(col, 140), anchor='w')
 
-        actions_frame = ttk.Frame(stats_frame)
+        actions_frame = ttk.Frame(stats_frame, style='Surface.TFrame')
         actions_frame.pack(fill='x', pady=(12, 0))
         ttk.Button(actions_frame, text="🔁 Aktualisieren", style='Toolbar.TButton', command=self.refresh_statistics).pack(side='left')
         ttk.Button(actions_frame, text="📤 Export", style='Toolbar.TButton', command=self.export_statistics).pack(side='left', padx=(10, 0))
