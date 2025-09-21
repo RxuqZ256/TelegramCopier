@@ -28,7 +28,7 @@ from telethon.errors import (
     SessionPasswordNeededError
 )
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox, simpledialog, font as tkfont
 
 # ==================== DATENSTRUKTUREN ====================
 
@@ -1011,11 +1011,17 @@ class TradingGUI:
         }
 
         self.root.configure(bg=base_bg)
-        # Fonts mit Leerzeichen im Namen müssen in geschweiften Klammern angegeben werden,
-        # damit Tk den Schriftgrad korrekt als Integer interpretiert.
-        self.root.option_add('*Font', '{Segoe UI} 10')
-        self.root.option_add('*TCombobox*Listbox.Font', '{Segoe UI} 10')
-        self.root.option_add('*TEntry.Font', '{Segoe UI} 10')
+
+        # Standard-Schriftarten über die Tk-Font-Objekte setzen, damit Tk sie korrekt
+        # interpretiert und alle Widgets (inkl. ttk) konsistent aktualisiert werden.
+        default_font = tkfont.nametofont('TkDefaultFont')
+        default_font.configure(family='Segoe UI', size=10)
+        text_font = tkfont.nametofont('TkTextFont')
+        text_font.configure(family='Segoe UI', size=10)
+
+        self.root.option_add('*TCombobox*Listbox.font', text_font)
+        self.style.configure('TEntry', font=default_font)
+        self.style.configure('TCombobox', font=default_font)
 
         self.style.configure('TFrame', background=base_bg)
         self.style.configure('Main.TFrame', background=base_bg)
