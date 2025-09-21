@@ -29,7 +29,7 @@ from telethon.errors import (
     SessionPasswordNeededError
 )
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog, font as tkfont
+from tkinter import ttk, messagebox, simpledialog, font as tkfont, filedialog
 
 # ==================== DATENSTRUKTUREN ====================
 
@@ -1609,6 +1609,25 @@ class TradingGUI:
             'auto_tp_sl': 'Automatische SL/TP-Erkennung'
         }
 
+        mt5_defaults = self.config_manager.default_config.get('mt5', {})
+        initial_mt5_cfg = self.current_config.get('mt5', {})
+        self.mt5_login_var = tk.StringVar(
+            master=self.root,
+            value=self._coerce_to_str(initial_mt5_cfg.get('login', mt5_defaults.get('login', "")))
+        )
+        self.mt5_password_var = tk.StringVar(
+            master=self.root,
+            value=self._coerce_to_str(initial_mt5_cfg.get('password', mt5_defaults.get('password', "")))
+        )
+        self.mt5_server_var = tk.StringVar(
+            master=self.root,
+            value=self._coerce_to_str(initial_mt5_cfg.get('server', mt5_defaults.get('server', "")))
+        )
+        self.mt5_path_var = tk.StringVar(
+            master=self.root,
+            value=self._coerce_to_str(initial_mt5_cfg.get('path', mt5_defaults.get('path', "")))
+        )
+
         # Bot-Instanz (setzt später Config/Setup)
         self.bot = MultiChatTradingBot(None, None, None)
         self.bot_starting = False
@@ -2029,6 +2048,96 @@ class TradingGUI:
             spinbox = ttk.Spinbox(numeric_frame, **spinbox_kwargs)
             spinbox.grid(row=row, column=column + 1, sticky='w', padx=(10, 0), pady=(0, 6))
             numeric_frame.grid_rowconfigure(row, pad=6)
+
+        mt5_frame = ttk.Frame(settings_tab, style='Card.TFrame', padding=(20, 18))
+        mt5_frame.pack(fill='x', pady=(0, 18))
+        mt5_frame.columnconfigure(1, weight=1)
+        ttk.Label(
+            mt5_frame,
+            text="MetaTrader 5 Verbindung",
+            style='FieldLabel.TLabel'
+        ).grid(row=0, column=0, columnspan=3, sticky='w')
+
+        entry_state = 'normal' if MT5_AVAILABLE else 'disabled'
+        button_state = 'normal' if MT5_AVAILABLE else 'disabled'
+
+        ttk.Label(mt5_frame, text="Login (Kontonummer):", style='FieldLabel.TLabel').grid(
+            row=1, column=0, sticky='w', pady=(12, 4)
+        )
+        ttk.Entry(
+            mt5_frame,
+            textvariable=self.mt5_login_var,
+            state=entry_state
+        ).grid(row=1, column=1, sticky='ew', padx=(10, 0), pady=(12, 4))
+
+        ttk.Label(mt5_frame, text="Passwort:", style='FieldLabel.TLabel').grid(
+            row=2, column=0, sticky='w', pady=(0, 4)
+        )
+        ttk.Entry(
+            mt5_frame,
+            textvariable=self.mt5_password_var,
+            show='•',
+            state=entry_state
+        ).grid(row=2, column=1, sticky='ew', padx=(10, 0), pady=(0, 4))
+
+        ttk.Label(mt5_frame, text="Server:", style='FieldLabel.TLabel').grid(
+            row=3, column=0, sticky='w', pady=(0, 4)
+        )
+        ttk.Entry(
+            mt5_frame,
+            textvariable=self.mt5_server_var,
+            state=entry_state
+        ).grid(row=3, column=1, sticky='ew', padx=(10, 0), pady=(0, 4))
+
+        ttk.Label(mt5_frame, text="MT5-Terminal (optional):", style='FieldLabel.TLabel').grid(
+            row=4, column=0, sticky='w', pady=(0, 4)
+        )
+        ttk.Entry(
+            mt5_frame,
+            textvariable=self.mt5_path_var,
+            state=entry_state
+        ).grid(row=4, column=1, sticky='ew', padx=(10, 0), pady=(0, 4))
+        ttk.Button(
+            mt5_frame,
+            text="Durchsuchen…",
+            command=self.browse_mt5_path,
+            state=button_state
+        ).grid(row=4, column=2, sticky='w', padx=(8, 0), pady=(0, 4))
+
+        mt5_button_row = ttk.Frame(mt5_frame, style='Card.TFrame')
+        mt5_button_row.grid(row=5, column=0, columnspan=3, sticky='w', pady=(14, 0))
+        ttk.Button(
+            mt5_button_row,
+            text="Zugangsdaten speichern",
+            command=self.save_mt5_credentials,
+            state=button_state
+        ).pack(side='left')
+        ttk.Button(
+            mt5_button_row,
+            text="Verbindung testen",
+            command=self.test_mt5_connection,
+            state=button_state
+        ).pack(side='left', padx=(12, 0))
+
+        if MT5_AVAILABLE:
+            ttk.Label(
+                mt5_frame,
+                text="Hinweis: Sie können hier auch ein MetaTrader-5-Demokonto hinterlegen und den LIVE-Modus damit testen.",
+                style='Info.TLabel',
+                wraplength=760,
+                justify='left'
+            ).grid(row=6, column=0, columnspan=3, sticky='w', pady=(12, 0))
+        else:
+            ttk.Label(
+                mt5_frame,
+                text=(
+                    "MetaTrader5-Python-Modul wurde nicht gefunden. Installieren Sie MetaTrader 5 inklusive "
+                    "Python-Paket, um den LIVE-Modus nutzen zu können."
+                ),
+                style='Warning.TLabel',
+                wraplength=760,
+                justify='left'
+            ).grid(row=6, column=0, columnspan=3, sticky='w', pady=(12, 0))
 
         toolbar = ttk.Frame(settings_tab, style='Toolbar.TFrame', padding=(16, 12))
         toolbar.pack(fill='x', pady=(0, 18))
@@ -2610,11 +2719,24 @@ class TradingGUI:
         self.bot.max_trades_per_hour = sanitized_values['max_trades_per_hour']
 
         mt5_cfg = self.current_config.setdefault('mt5', {})
+        login_value = self._coerce_to_str(mt5_cfg.get('login', ""))
+        password_value = self._coerce_to_str(mt5_cfg.get('password', ""))
+        server_value = self._coerce_to_str(mt5_cfg.get('server', ""))
+        path_value = self._coerce_to_str(mt5_cfg.get('path', ""))
+
+        try:
+            self.mt5_login_var.set(login_value)
+            self.mt5_password_var.set(password_value)
+            self.mt5_server_var.set(server_value)
+            self.mt5_path_var.set(path_value)
+        except tk.TclError:
+            pass
+
         self.bot.update_mt5_credentials(
-            mt5_cfg.get('login'),
-            mt5_cfg.get('password'),
-            mt5_cfg.get('server'),
-            mt5_cfg.get('path')
+            login_value.strip() or None,
+            password_value or None,
+            server_value.strip() or None,
+            path_value.strip() or None
         )
 
         signal_defaults = self.config_manager.default_config.get('signals', {})
@@ -2637,6 +2759,121 @@ class TradingGUI:
         """Log-Nachricht in GUI anzeigen"""
         self.log_text.insert('end', f"{message}\n")
         self.log_text.see('end')
+
+    def _collect_mt5_form_data(self):
+        """Liest die MT5-Formularwerte aus."""
+        try:
+            login = self.mt5_login_var.get()
+            password = self.mt5_password_var.get()
+            server = self.mt5_server_var.get()
+            path = self.mt5_path_var.get()
+        except tk.TclError:
+            return "", "", "", ""
+
+        return login.strip(), password, server.strip(), path.strip()
+
+    def save_mt5_credentials(self, silent: bool = False) -> bool:
+        """Speichert MT5-Zugangsdaten in der Konfiguration."""
+        login, password, server, path = self._collect_mt5_form_data()
+
+        mt5_cfg = self.current_config.setdefault('mt5', {})
+        mt5_cfg['login'] = login
+        mt5_cfg['password'] = password
+        mt5_cfg['server'] = server
+        mt5_cfg['path'] = path
+
+        self.bot.update_mt5_credentials(
+            login or None,
+            password or None,
+            server or None,
+            path or None
+        )
+
+        try:
+            self.config_manager.save_config(self.current_config)
+        except Exception as exc:
+            self.log_message(f"Fehler beim Speichern der MT5-Daten: {exc}")
+            return False
+
+        if not silent:
+            self.log_message("MT5-Zugangsdaten aktualisiert.")
+        return True
+
+    def test_mt5_connection(self):
+        """Testet die Verbindung zu MetaTrader 5."""
+        if not MT5_AVAILABLE:
+            message = "MetaTrader5-Python-Modul ist nicht verfügbar. Installieren Sie es, um den LIVE-Modus zu nutzen."
+            self.log_message(message)
+            try:
+                messagebox.showwarning("MT5 nicht verfügbar", message)
+            except Exception:
+                pass
+            return
+
+        login, password, server, path = self._collect_mt5_form_data()
+        self.save_mt5_credentials(silent=True)
+
+        if not login or not password or not server:
+            message = "Bitte geben Sie Login, Passwort und Server an, bevor Sie die Verbindung testen."
+            self.log_message(message)
+            try:
+                messagebox.showwarning("Angaben unvollständig", message)
+            except Exception:
+                pass
+            return
+
+        self.log_message("Teste MT5-Verbindung ...")
+        success = self.bot.ensure_mt5_session(enforce_demo_on_fail=False)
+        if success:
+            message = "MT5-Verbindung erfolgreich aufgebaut."
+            self.log_message(message)
+            try:
+                messagebox.showinfo("Verbindung erfolgreich", message)
+            except Exception:
+                pass
+        else:
+            message = self.bot.get_last_mt5_error() or "MT5-Verbindung konnte nicht hergestellt werden."
+            self.log_message(message)
+            try:
+                messagebox.showerror("Verbindung fehlgeschlagen", message)
+            except Exception:
+                pass
+
+    def browse_mt5_path(self):
+        """Dateidialog zum Auswählen des MT5-Terminals öffnen."""
+        if not MT5_AVAILABLE:
+            message = "MetaTrader5-Python-Modul ist nicht verfügbar."
+            self.log_message(message)
+            try:
+                messagebox.showwarning("MT5 nicht verfügbar", message)
+            except Exception:
+                pass
+            return
+
+        try:
+            selected = filedialog.askopenfilename(
+                title="MetaTrader-5-Terminal auswählen",
+                filetypes=[
+                    ("MetaTrader Terminal", "terminal64.exe"),
+                    ("Executable", "*.exe"),
+                    ("Alle Dateien", "*.*")
+                ]
+            )
+        except Exception as exc:
+            self.log_message(f"Fehler beim Öffnen des Dateidialogs: {exc}")
+            return
+
+        if not selected:
+            return
+
+        try:
+            self.mt5_path_var.set(selected)
+        except tk.TclError:
+            self.log_message("Der ausgewählte Pfad konnte nicht übernommen werden.")
+            return
+
+        self.save_mt5_credentials(silent=True)
+        self.log_message("MT5-Terminalpfad aktualisiert.")
 
     def _add_trading_var_trace(self, key: str, var: tk.Variable, caster):
         """Trace für Trading-Variablen registrieren."""
@@ -2782,6 +3019,19 @@ class TradingGUI:
             minimum = 0
 
         return value >= minimum
+
+    def _coerce_to_str(self, value, default: str = "") -> str:
+        """Hilfsfunktion zur String-Normalisierung."""
+        if value is None:
+            return default or ""
+        if isinstance(value, str):
+            return value
+        try:
+            if isinstance(value, float) and value.is_integer():
+                return str(int(value))
+            return str(value)
+        except Exception:
+            return default or ""
 
     def _coerce_to_float(self, value, default: float) -> float:
         """Hilfsfunktion zur sicheren Float-Konvertierung."""
