@@ -806,7 +806,8 @@ class ConfigManager:
                 "api_id": "",
                 "api_hash": "",
                 "phone": "",
-                "session_name": "trading_session"
+                "session_name": "trading_session",
+                "prompt_credentials_on_start": False
             },
             "trading": {
                 "demo_mode": True,
@@ -1618,6 +1619,8 @@ class SetupAssistant:
         self.parent = parent
         self.window = None
         self.config_saved = False
+        self.config_manager = ConfigManager()
+        self.current_config = self.config_manager.load_config()
 
     def show_setup_dialog(self):
         """Setup-Dialog anzeigen"""
@@ -1661,17 +1664,28 @@ class SetupAssistant:
         )
         ttk.Label(form_frame, text=instructions, wraplength=500).pack(pady=(0, 15))
 
+        telegram_cfg = self.current_config.get('telegram', {})
+
         ttk.Label(form_frame, text="API ID:").pack(anchor='w')
-        self.setup_api_id = tk.StringVar()
+        self.setup_api_id = tk.StringVar(value=str(telegram_cfg.get('api_id', "")))
         ttk.Entry(form_frame, textvariable=self.setup_api_id, width=40).pack(fill='x', pady=(0, 10))
 
         ttk.Label(form_frame, text="API Hash:").pack(anchor='w')
-        self.setup_api_hash = tk.StringVar()
+        self.setup_api_hash = tk.StringVar(value=str(telegram_cfg.get('api_hash', "")))
         ttk.Entry(form_frame, textvariable=self.setup_api_hash, width=40, show='*').pack(fill='x', pady=(0, 10))
 
         ttk.Label(form_frame, text="Telefonnummer (mit Ländercode, z.B. +49...):").pack(anchor='w')
-        self.setup_phone = tk.StringVar()
+        self.setup_phone = tk.StringVar(value=str(telegram_cfg.get('phone', "")))
         ttk.Entry(form_frame, textvariable=self.setup_phone, width=40).pack(fill='x', pady=(0, 10))
+
+        self.prompt_credentials = tk.BooleanVar(
+            value=bool(telegram_cfg.get('prompt_credentials_on_start', False))
+        )
+        ttk.Checkbutton(
+            form_frame,
+            text="API-Zugangsdaten bei jedem Start erneut abfragen",
+            variable=self.prompt_credentials
+        ).pack(anchor='w', pady=(5, 0))
 
         button_frame = ttk.Frame(self.window)
         button_frame.pack(fill='x', padx=20, pady=20)
@@ -1690,30 +1704,22 @@ class SetupAssistant:
             return
 
         try:
-            config = {
-                "telegram": {
-                    "api_id": api_id,
-                    "api_hash": api_hash,
-                    "phone": phone,
-                    "session_name": "trading_session"
-                },
-                "trading": {
-                    "demo_mode": True,
-                    "default_lot_size": 0.01,
-                    "max_spread_pips": 3.0,
-                    "risk_percent": 2.0,
-                    "max_trades_per_hour": 5
-                },
-                "signals": {
-                    "instant_trading_enabled": True,
-                    "zone_trading_enabled": True,
-                    "require_confirmation": True,
-                    "auto_tp_sl": True
-                }
-            }
+            config = self.config_manager.load_config()
+            telegram_cfg = config.setdefault('telegram', {})
+            telegram_cfg.update({
+                'api_id': api_id,
+                'api_hash': api_hash,
+                'phone': phone,
+                'session_name': telegram_cfg.get('session_name', 'trading_session'),
+                'prompt_credentials_on_start': self.prompt_credentials.get()
+            })
 
-            config_manager = ConfigManager()
-            config_manager.save_config(config)
+            if 'trading' not in config:
+                config['trading'] = self.config_manager.default_config.get('trading', {})
+            if 'signals' not in config:
+                config['signals'] = self.config_manager.default_config.get('signals', {})
+
+            self.config_manager.save_config(config)
             messagebox.showinfo("Erfolg", "Konfiguration gespeichert. Bitte starten Sie den Bot.")
             self.config_saved = True
             self.window.destroy()
@@ -1735,11 +1741,15 @@ def check_first_run() -> bool:
     """Prüfen ob es der erste Start ist"""
     config_manager = ConfigManager()
     config = config_manager.load_config()
+    telegram_cfg = config.get('telegram', {})
+
+    if telegram_cfg.get('prompt_credentials_on_start'):
+        return True
 
     if not all([
-        config['telegram'].get('api_id'),
-        config['telegram'].get('api_hash'),
-        config['telegram'].get('phone')
+        telegram_cfg.get('api_id'),
+        telegram_cfg.get('api_hash'),
+        telegram_cfg.get('phone')
     ]):
         return True
     return False
