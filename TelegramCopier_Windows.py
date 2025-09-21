@@ -22,8 +22,13 @@ except Exception:
     MT5_AVAILABLE = False
 
 from telethon import TelegramClient, events
+from telethon.errors import (
+    PhoneCodeExpiredError,
+    PhoneCodeInvalidError,
+    SessionPasswordNeededError
+)
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 
 # ==================== DATENSTRUKTUREN ====================
 
@@ -476,6 +481,100 @@ class MultiChatTradingBot:
         """GUI informieren, dass ein Login-Code benötigt wird."""
         self.send_message('AUTH_REQUIRED', {'message': message})
 
+    async def complete_login_with_code(self, code: str) -> Dict[str, object]:
+        """Login-Code validieren und Telegram-Session abschließen."""
+
+        result: Dict[str, object] = {
+            'success': False,
+            'message': None,
+            'require_password': False
+        }
+
+        if not code:
+            result['message'] = "Es wurde kein Login-Code übermittelt."
+            self.log(result['message'], "WARNING")
+            return result
+
+        if not self.client:
+            result['message'] = "Telegram-Client nicht initialisiert."
+            self.log(result['message'], "ERROR")
+            return result
+
+        if not await self.ensure_connected():
+            result['message'] = "Telegram-Client konnte nicht verbunden werden."
+            return result
+
+        try:
+            if await self.client.is_user_authorized():
+                self.log("Telegram ist bereits autorisiert. Bot kann gestartet werden.")
+                result['success'] = True
+                result['message'] = "Telegram ist bereits autorisiert."
+                return result
+
+            await self.client.sign_in(phone=self.phone, code=code)
+            success_message = "Telegram-Login erfolgreich abgeschlossen."
+            self.log(success_message)
+            result['success'] = True
+            result['message'] = success_message
+            return result
+        except SessionPasswordNeededError:
+            message = (
+                "Telegram erfordert zusätzlich ein Passwort (2FA). "
+                "Bitte geben Sie das Passwort ein, um den Login abzuschließen."
+            )
+            self.log(message, "ERROR")
+            result['message'] = message
+            result['require_password'] = True
+        except (PhoneCodeInvalidError, PhoneCodeExpiredError):
+            message = "Der eingegebene Telegram-Code ist ungültig oder abgelaufen."
+            self.log(message, "ERROR")
+            result['message'] = message
+            await self._request_new_code_with_notification(
+                "Der eingegebene Code war ungültig oder abgelaufen. Bitte geben Sie den neu gesendeten Code ein."
+            )
+        except Exception as e:
+            message = f"Fehler bei der Telegram-Anmeldung: {e}"
+            self.log(message, "ERROR")
+            result['message'] = message
+            await self._request_new_code_with_notification(
+                "Der Telegram-Login ist fehlgeschlagen. Bitte geben Sie den neu gesendeten Code ein."
+            )
+
+        return result
+
+    async def _request_new_code_with_notification(self, notify_message: Optional[str]) -> bool:
+        """Neuen Login-Code anfordern und GUI benachrichtigen."""
+
+        extra_info = ""
+        success = False
+
+        if not self.client:
+            extra_info = "Telegram-Client nicht initialisiert. Neuer Code kann nicht angefordert werden."
+            self.log(extra_info, "ERROR")
+        elif not self.phone:
+            extra_info = "Keine Telefonnummer hinterlegt. Neuer Code kann nicht angefordert werden."
+            self.log(extra_info, "ERROR")
+        elif not await self.ensure_connected():
+            extra_info = "Telegram-Verbindung konnte nicht aufgebaut werden. Neuer Code wurde nicht angefordert."
+            self.log(extra_info, "ERROR")
+        else:
+            try:
+                await self.client.send_code_request(self.phone)
+                extra_info = "Neuer Login-Code wurde angefordert. Bitte prüfen Sie Ihre Telegram-App."
+                self.log(extra_info, "INFO")
+                success = True
+            except Exception as code_error:
+                extra_info = f"Fehler beim erneuten Anfordern des Login-Codes: {code_error}"
+                self.log(extra_info, "ERROR")
+
+        if notify_message:
+            message = notify_message
+            if extra_info:
+                message = f"{notify_message}\n\n{extra_info}"
+            self.notify_auth_required(message)
+
+        return success
+
     async def start(self) -> bool:
         """Bot starten"""
 
@@ -748,6 +847,37 @@ class ConfigManager:
 
 # ==================== GUI ====================
 
+
+class AuthCodeDialog(simpledialog.Dialog):
+    """Einfache Dialogbox zur Eingabe des Telegram-Login-Codes."""
+
+    def __init__(self, parent: tk.Tk, message: str):
+        self.message = message
+        self.code: Optional[str] = None
+        super().__init__(parent, title="Telegram-Login erforderlich")
+
+    def body(self, master):  # type: ignore[override]
+        master.columnconfigure(1, weight=1)
+
+        ttk.Label(
+            master,
+            text=self.message,
+            wraplength=360,
+            justify='left'
+        ).grid(row=0, column=0, columnspan=2, sticky='w', padx=10, pady=(10, 10))
+
+        ttk.Label(master, text="Login-Code:").grid(
+            row=1, column=0, sticky='e', padx=(10, 5), pady=(0, 10)
+        )
+
+        self.code_entry = ttk.Entry(master)
+        self.code_entry.grid(row=1, column=1, sticky='we', padx=(0, 10), pady=(0, 10))
+        return self.code_entry
+
+    def apply(self):  # type: ignore[override]
+        self.code = (self.code_entry.get() or "").strip()
+
+
 class TradingGUI:
     """Haupt-GUI für Multi-Chat-Trading"""
 
@@ -759,6 +889,9 @@ class TradingGUI:
         # Bot-Instanz (setzt später Config/Setup)
         self.bot = MultiChatTradingBot(None, None, None)
         self.bot_starting = False
+        self._auth_dialog_open = False
+        self._last_auth_message: Optional[str] = None
+        self._pending_auth_message: Optional[str] = None
 
         # Buttons (werden in create_widgets gesetzt)
         self.start_button: Optional[ttk.Button] = None
@@ -1101,8 +1234,73 @@ class TradingGUI:
 
     def show_auth_required_dialog(self, message: str):
         """Dialog anzeigen, wenn ein Login-Code erforderlich ist."""
-        messagebox.showwarning("Telegram-Login erforderlich", message)
-        self.log_message(message)
+        if message != self._last_auth_message:
+            self.log_message(message)
+            self._last_auth_message = message
+
+        if self._auth_dialog_open:
+            self._pending_auth_message = message
+            return
+
+        self._auth_dialog_open = True
+        try:
+            dialog = AuthCodeDialog(self.root, message)
+            code = getattr(dialog, 'code', None)
+        finally:
+            self._auth_dialog_open = False
+
+        if code:
+            self.log_message("Login-Code erhalten. Authentifizierung wird geprüft...")
+            self.verify_login_code(code)
+        else:
+            self.log_message("Login-Code-Eingabe abgebrochen oder ohne Eingabe geschlossen.")
+
+        pending_message = self._pending_auth_message
+        self._pending_auth_message = None
+        self._last_auth_message = None
+
+        if pending_message:
+            self.root.after(0, lambda msg=pending_message: self.show_auth_required_dialog(msg))
+
+    def verify_login_code(self, code: str):
+        """Login-Code asynchron prüfen."""
+
+        def run_verification():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(self.bot.complete_login_with_code(code))
+                self.root.after(0, lambda res=result: self.handle_login_code_result(res))
+            except Exception as e:
+                self.root.after(0, lambda err=e: self.handle_login_code_exception(err))
+            finally:
+                loop.close()
+
+        threading.Thread(target=run_verification, daemon=True).start()
+
+    def handle_login_code_result(self, result: Dict):
+        """Ergebnis der Login-Code-Prüfung verarbeiten."""
+        if isinstance(result, dict) and result.get('success'):
+            self.status_label.config(text="Telegram-Login erfolgreich. Bot wird gestartet...")
+            self.log_message("Telegram-Login erfolgreich. Bot wird erneut gestartet.")
+            self.start_bot()
+        elif isinstance(result, dict) and result.get('require_password'):
+            message = result.get('message') if isinstance(result, dict) else None
+            messagebox.showerror(
+                "Telegram 2FA erforderlich",
+                message or (
+                    "Telegram erfordert zusätzlich ein Passwort (2FA). "
+                    "Bitte geben Sie das Passwort in der Telegram-App ein."
+                )
+            )
+
+    def handle_login_code_exception(self, error: Exception):
+        """Fehler bei der Login-Code-Prüfung behandeln."""
+        self.log_message(f"Fehler bei der Telegram-Authentifizierung: {error}")
+        messagebox.showerror(
+            "Telegram-Login fehlgeschlagen",
+            f"Fehler bei der Verarbeitung des Login-Codes: {error}"
+        )
 
     def run(self):
         """GUI starten"""
