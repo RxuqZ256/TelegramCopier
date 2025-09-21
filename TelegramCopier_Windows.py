@@ -401,6 +401,7 @@ class MultiChatTradingBot:
         self.is_running = False
         self.demo_mode = True  # Immer mit Demo starten!
         self.pending_trade_updates: Dict[int, Dict] = {}
+        self.execution_mode = ExecutionMode.INSTANT
 
         # Zugangsdaten anwenden (falls vorhanden)
         self.update_credentials(api_id, api_hash, phone, session_name=session_name)
@@ -658,8 +659,15 @@ class MultiChatTradingBot:
             if signal:
                 kind = signal.get('kind', 'trade')
                 if kind == 'trade':
+                    if self.execution_mode == ExecutionMode.DISABLED:
+                        self.log(
+                            f"Trading deaktiviert - Signal von {chat_source.chat_name} ignoriert.",
+                            "INFO"
+                        )
+                        return
+
                     trade_result = await self.execute_signal(signal, chat_source, message_text)
-                    if trade_result:
+                    if trade_result and trade_result.get('status') == 'executed':
                         pending_info = {
                             'ticket': trade_result['ticket'],
                             'symbol': trade_result['symbol'],
@@ -671,6 +679,8 @@ class MultiChatTradingBot:
                             self.pending_trade_updates[chat_id] = pending_info
                         else:
                             self.pending_trade_updates.pop(chat_id, None)
+                    elif trade_result:
+                        self.pending_trade_updates.pop(chat_id, None)
                 elif kind == 'update':
                     await self.apply_trade_update(chat_source, signal)
 
@@ -680,32 +690,62 @@ class MultiChatTradingBot:
     async def execute_signal(self, signal: Dict, chat_source: ChatSource, original_message: str):
         """Signal ausführen (Demo oder Live)"""
         try:
-            if self.demo_mode or not MT5_AVAILABLE:
-                stop_loss_value = signal.get('stop_loss')
-                stop_loss = float(stop_loss_value) if stop_loss_value is not None else 0.0
-                take_profits_raw = signal.get('take_profits') or []
-                normalized_tps = []
-                for tp in take_profits_raw:
-                    try:
-                        normalized_tps.append(float(tp))
-                    except (TypeError, ValueError):
-                        continue
-                take_profit = normalized_tps[0] if normalized_tps else (
-                    float(signal.get('take_profit', 0.0)) if signal.get('take_profit') else 0.0
-                )
+            stop_loss_value = signal.get('stop_loss')
+            stop_loss = float(stop_loss_value) if stop_loss_value is not None else 0.0
+            take_profits_raw = signal.get('take_profits') or []
+            normalized_tps = []
+            for tp in take_profits_raw:
+                try:
+                    normalized_tps.append(float(tp))
+                except (TypeError, ValueError):
+                    continue
+            take_profit = normalized_tps[0] if normalized_tps else (
+                float(signal.get('take_profit', 0.0)) if signal.get('take_profit') else 0.0
+            )
 
-                # Demo-Trade simulieren
+            base_trade_info = {
+                'symbol': signal['symbol'],
+                'direction': signal['action'],
+                'stop_loss': stop_loss,
+                'take_profit': take_profit,
+                'take_profits': normalized_tps
+            }
+
+            if self.execution_mode == ExecutionMode.DISABLED:
+                self.log(
+                    f"Ausführungsmodus 'Ausgeschaltet': Signal von {chat_source.chat_name} wird ignoriert.",
+                    "INFO"
+                )
+                return None
+
+            if self.execution_mode == ExecutionMode.ZONE_WAIT:
+                pending_result = {
+                    'ticket': f"PENDING_{int(datetime.now().timestamp())}",
+                    'price': 0.0,
+                    'lot_size': 0.0,
+                    'status': 'pending',
+                    'profit_loss': 0.0,
+                    **base_trade_info
+                }
+                self.trade_tracker.add_trade(pending_result, chat_source, original_message)
+                self.log(
+                    f"Signal als Pending markiert (Zone Monitoring): {signal['action']} {signal['symbol']}"
+                )
+                self.send_message('TRADE_EXECUTED', {
+                    **pending_result,
+                    'source': chat_source.chat_name,
+                    'demo': True
+                })
+                return pending_result
+
+            if self.demo_mode or not MT5_AVAILABLE:
                 demo_result = {
                     'ticket': f"DEMO_{int(datetime.now().timestamp())}",
-                    'symbol': signal['symbol'],
-                    'direction': signal['action'],
                     'price': 1.0850 if 'EUR' in signal['symbol'] else 2660.00,
                     'lot_size': 0.01,
-                    'stop_loss': stop_loss,
-                    'take_profit': take_profit,
-                    'take_profits': normalized_tps,
                     'status': 'executed',
-                    'profit_loss': 0.0
+                    'profit_loss': 0.0,
+                    **base_trade_info
                 }
 
                 # Trade zu Tracker hinzufügen
@@ -842,6 +882,7 @@ class ConfigManager:
             },
             "trading": {
                 "demo_mode": True,
+                "execution_mode": ExecutionMode.INSTANT.value,
                 "default_lot_size": 0.01,
                 "max_spread_pips": 3.0,
                 "risk_percent": 2.0,
@@ -998,6 +1039,18 @@ class TradingGUI:
             pass
         self._configure_styles()
 
+        # Konfiguration & Ausführungsmodi
+        self.config_manager = ConfigManager()
+        self.current_config: Dict = config or self.config_manager.load_config()
+        self.execution_mode_labels: Dict[ExecutionMode, str] = {
+            ExecutionMode.INSTANT: "Sofortausführung",
+            ExecutionMode.ZONE_WAIT: "Zone Monitoring",
+            ExecutionMode.DISABLED: "Ausgeschaltet"
+        }
+        self.execution_mode_label_to_enum: Dict[str, ExecutionMode] = {
+            label: mode for mode, label in self.execution_mode_labels.items()
+        }
+
         # Bot-Instanz (setzt später Config/Setup)
         self.bot = MultiChatTradingBot(None, None, None)
         self.bot_starting = False
@@ -1012,8 +1065,7 @@ class TradingGUI:
         self.create_widgets()
         self.setup_message_processing()
 
-        if config:
-            self.apply_config(config)
+        self.apply_config(self.current_config)
 
     def _configure_styles(self):
         """Globale Styles, Farben und Schriftarten setzen."""
@@ -1313,13 +1365,16 @@ class TradingGUI:
         ).grid(row=0, column=0, sticky='w')
 
         ttk.Label(settings_frame, text="Ausführungsmodus:", style='FieldLabel.TLabel').grid(row=0, column=1, sticky='w')
-        self.execution_mode_var = tk.StringVar(value="Sofortausführung")
-        ttk.Combobox(
+        default_execution_label = self.execution_mode_labels.get(ExecutionMode.INSTANT, "Sofortausführung")
+        self.execution_mode_var = tk.StringVar(value=default_execution_label)
+        self.execution_mode_combobox = ttk.Combobox(
             settings_frame,
             textvariable=self.execution_mode_var,
-            values=["Sofortausführung", "Zone Monitoring", "Ausgeschaltet"],
+            values=list(self.execution_mode_labels.values()),
             state='readonly'
-        ).grid(row=0, column=2, sticky='ew', padx=(8, 0))
+        )
+        self.execution_mode_combobox.grid(row=0, column=2, sticky='ew', padx=(8, 0))
+        self.execution_mode_combobox.bind('<<ComboboxSelected>>', self.on_execution_mode_change)
 
         warning_label = ttk.Label(
             settings_frame,
@@ -1591,6 +1646,33 @@ class TradingGUI:
             self.trade_status_label.config(text=status_text)
         self.log_message(f"Modus geändert: {mode_text}")
 
+    def on_execution_mode_change(self, *_):
+        """Ausführungsmodus wechseln und speichern."""
+        selected_label = self.execution_mode_var.get() if hasattr(self, 'execution_mode_var') else None
+        if not selected_label:
+            return
+
+        mode = self.execution_mode_label_to_enum.get(selected_label)
+        if not mode:
+            self.log_message(f"Unbekannter Ausführungsmodus ausgewählt: {selected_label}")
+            return
+
+        if getattr(self.bot, 'execution_mode', ExecutionMode.INSTANT) != mode:
+            self.bot.execution_mode = mode
+
+        trading_cfg = self.current_config.setdefault('trading', {})
+        previous_value = trading_cfg.get('execution_mode')
+        trading_cfg['execution_mode'] = mode.value
+
+        try:
+            if previous_value != mode.value:
+                self.config_manager.save_config(self.current_config)
+        except Exception as exc:
+            self.log_message(f"Fehler beim Speichern des Ausführungsmodus: {exc}")
+        else:
+            if previous_value != mode.value:
+                self.log_message(f"Ausführungsmodus geändert zu: {selected_label}")
+
     def start_bot(self):
         """Bot starten"""
         if self.bot.is_running or self.bot_starting:
@@ -1679,6 +1761,7 @@ class TradingGUI:
 
     def apply_config(self, config: Dict):
         """Konfiguration auf Bot und GUI anwenden"""
+        self.current_config = config
         telegram_cfg = config.get('telegram', {})
         session_name = telegram_cfg.get('session_name', 'trading_session')
         self.bot.update_credentials(
@@ -1688,13 +1771,24 @@ class TradingGUI:
             session_name=session_name
         )
 
-        trading_cfg = config.get('trading', {})
+        trading_cfg = self.current_config.setdefault('trading', {})
         demo_mode = bool(trading_cfg.get('demo_mode', True))
         self.bot.demo_mode = demo_mode
         if hasattr(self, 'demo_var'):
             self.demo_var.set(demo_mode)
         if hasattr(self, 'trade_status_label'):
             self.trade_status_label.config(text="Demo-Modus aktiv" if demo_mode else "LIVE-Modus aktiv")
+
+        execution_mode_value = trading_cfg.get('execution_mode', ExecutionMode.INSTANT.value)
+        try:
+            execution_mode = ExecutionMode(execution_mode_value)
+        except ValueError:
+            execution_mode = ExecutionMode.INSTANT
+        self.bot.execution_mode = execution_mode
+
+        if hasattr(self, 'execution_mode_var'):
+            label = self.execution_mode_labels.get(execution_mode, self.execution_mode_labels[ExecutionMode.INSTANT])
+            self.execution_mode_var.set(label)
 
     def log_message(self, message):
         """Log-Nachricht in GUI anzeigen"""
