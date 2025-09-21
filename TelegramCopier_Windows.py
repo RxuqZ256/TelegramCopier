@@ -163,14 +163,23 @@ class TradeTracker:
 
     def add_trade(self, trade_info: Dict, chat_source: ChatSource, original_message: str):
         """Trade mit Quelleninfo hinzufügen"""
+
+        def _ensure_float(value, default=0.0):
+            try:
+                if isinstance(value, str):
+                    value = value.replace(',', '.')
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
         record = TradeRecord(
             ticket=str(trade_info['ticket']),
             symbol=trade_info['symbol'],
             direction=trade_info['direction'],
-            lot_size=float(trade_info['lot_size']),
-            entry_price=float(trade_info['price']),
-            stop_loss=float(trade_info.get('stop_loss', 0.0)),
-            take_profit=float(trade_info.get('take_profit', 0.0)),
+            lot_size=_ensure_float(trade_info.get('lot_size', 0.0), 0.0),
+            entry_price=_ensure_float(trade_info.get('price', 0.0), 0.0),
+            stop_loss=_ensure_float(trade_info.get('stop_loss', 0.0), 0.0),
+            take_profit=_ensure_float(trade_info.get('take_profit', 0.0), 0.0),
             timestamp=datetime.now(),
             source_chat_id=chat_source.chat_id,
             source_chat_name=chat_source.chat_name,
@@ -178,7 +187,7 @@ class TradeTracker:
             source_priority=chat_source.priority,
             original_message=(original_message or "")[:500],
             status=trade_info.get('status', 'executed'),
-            profit_loss=float(trade_info.get('profit_loss', 0.0))
+            profit_loss=_ensure_float(trade_info.get('profit_loss', 0.0), 0.0)
         )
         self.trade_records[record.ticket] = record
 
@@ -213,6 +222,48 @@ class TradeTracker:
             'last_trade': max(trades, key=lambda t: t.timestamp).timestamp
         }
 
+    def update_trade_levels(self, ticket: str, stop_loss: Optional[float] = None, take_profits: Optional[List[float]] = None) -> Optional[TradeRecord]:
+        """Stop-Loss und Take-Profit eines Trades aktualisieren"""
+        record = self.trade_records.get(ticket)
+        if not record:
+            return None
+
+        def _ensure_float(value, default=None):
+            try:
+                if isinstance(value, str):
+                    value = value.replace(',', '.')
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
+        if stop_loss is not None:
+            parsed_sl = _ensure_float(stop_loss, record.stop_loss)
+            if parsed_sl is not None:
+                record.stop_loss = parsed_sl
+
+        if take_profits:
+            parsed_tps = []
+            for tp in take_profits:
+                parsed_tp = _ensure_float(tp, None)
+                if parsed_tp is not None:
+                    parsed_tps.append(parsed_tp)
+            if parsed_tps:
+                record.take_profit = parsed_tps[0]
+
+        return record
+
+    def get_last_trade_for_chat(self, chat_id: int) -> Optional[TradeRecord]:
+        """Letzten Trade für einen Chat ermitteln"""
+        trades = [
+            record for record in self.trade_records.values()
+            if record.source_chat_id == chat_id
+        ]
+
+        if not trades:
+            return None
+
+        return max(trades, key=lambda t: t.timestamp)
+
 
 # ==================== SIGNAL PROCESSOR ====================
 
@@ -238,10 +289,35 @@ class SignalProcessor:
             'sell_zone': r'(?i)\b(gold|xau|eurusd|eur|gbpusd|gbp|usdjpy|usd)\b.*\bsell\b\s+([0-9]+\.?[0-9]*)'
         }
 
+    def _parse_price(self, value: str) -> Optional[float]:
+        try:
+            normalized = value.replace(',', '.').strip()
+            return float(normalized)
+        except (AttributeError, ValueError):
+            return None
+
+    def extract_stop_loss(self, message_text: str) -> Optional[float]:
+        match = re.search(r'(?i)\bsl\b[:\s]*([0-9]+[0-9\.,]*)', message_text)
+        if match:
+            return self._parse_price(match.group(1))
+        return None
+
+    def extract_take_profits(self, message_text: str) -> List[float]:
+        matches = re.findall(r'(?i)\btp\d*\b[:\s]*([0-9]+[0-9\.,]*)', message_text)
+        take_profits: List[float] = []
+        for match in matches:
+            price = self._parse_price(match)
+            if price is not None:
+                take_profits.append(price)
+        return take_profits
+
     async def process_signal(self, message_text: str, chat_source: ChatSource) -> Optional[Dict]:
         """Signal verarbeiten"""
         if not message_text:
             return None
+
+        stop_loss = self.extract_stop_loss(message_text)
+        take_profits = self.extract_take_profits(message_text)
 
         # Buy Now
         match = re.search(self.patterns['buy_now'], message_text)
@@ -249,11 +325,14 @@ class SignalProcessor:
             base = match.group(1).upper()
             symbol = self.symbol_mapping.get(base, base)
             return {
+                'kind': 'trade',
                 'type': 'instant',
                 'action': 'BUY',
                 'symbol': symbol,
                 'source': chat_source.chat_name,
-                'execution_mode': ExecutionMode.INSTANT
+                'execution_mode': ExecutionMode.INSTANT,
+                'stop_loss': stop_loss,
+                'take_profits': take_profits
             }
 
         # Sell Now
@@ -262,11 +341,22 @@ class SignalProcessor:
             base = match.group(1).upper()
             symbol = self.symbol_mapping.get(base, base)
             return {
+                'kind': 'trade',
                 'type': 'instant',
                 'action': 'SELL',
                 'symbol': symbol,
                 'source': chat_source.chat_name,
-                'execution_mode': ExecutionMode.INSTANT
+                'execution_mode': ExecutionMode.INSTANT,
+                'stop_loss': stop_loss,
+                'take_profits': take_profits
+            }
+
+        if stop_loss is not None or take_profits:
+            return {
+                'kind': 'update',
+                'stop_loss': stop_loss,
+                'take_profits': take_profits,
+                'source': chat_source.chat_name
             }
 
         return None
@@ -296,6 +386,7 @@ class MultiChatTradingBot:
         # Status
         self.is_running = False
         self.demo_mode = True  # Immer mit Demo starten!
+        self.pending_trade_updates: Dict[int, Dict] = {}
 
     async def start(self):
         """Bot starten"""
@@ -339,7 +430,23 @@ class MultiChatTradingBot:
             signal = await self.signal_processor.process_signal(message_text, chat_source)
 
             if signal:
-                await self.execute_signal(signal, chat_source, message_text)
+                kind = signal.get('kind', 'trade')
+                if kind == 'trade':
+                    trade_result = await self.execute_signal(signal, chat_source, message_text)
+                    if trade_result:
+                        pending_info = {
+                            'ticket': trade_result['ticket'],
+                            'symbol': trade_result['symbol'],
+                            'awaiting_sl': signal.get('stop_loss') is None,
+                            'awaiting_tp': not signal.get('take_profits'),
+                            'timestamp': datetime.now()
+                        }
+                        if pending_info['awaiting_sl'] or pending_info['awaiting_tp']:
+                            self.pending_trade_updates[chat_id] = pending_info
+                        else:
+                            self.pending_trade_updates.pop(chat_id, None)
+                elif kind == 'update':
+                    await self.apply_trade_update(chat_source, signal)
 
         except Exception as e:
             self.log(f"Fehler bei Nachrichtenverarbeitung: {e}", "ERROR")
@@ -348,6 +455,19 @@ class MultiChatTradingBot:
         """Signal ausführen (Demo oder Live)"""
         try:
             if self.demo_mode or not MT5_AVAILABLE:
+                stop_loss_value = signal.get('stop_loss')
+                stop_loss = float(stop_loss_value) if stop_loss_value is not None else 0.0
+                take_profits_raw = signal.get('take_profits') or []
+                normalized_tps = []
+                for tp in take_profits_raw:
+                    try:
+                        normalized_tps.append(float(tp))
+                    except (TypeError, ValueError):
+                        continue
+                take_profit = normalized_tps[0] if normalized_tps else (
+                    float(signal.get('take_profit', 0.0)) if signal.get('take_profit') else 0.0
+                )
+
                 # Demo-Trade simulieren
                 demo_result = {
                     'ticket': f"DEMO_{int(datetime.now().timestamp())}",
@@ -355,8 +475,9 @@ class MultiChatTradingBot:
                     'direction': signal['action'],
                     'price': 1.0850 if 'EUR' in signal['symbol'] else 2660.00,
                     'lot_size': 0.01,
-                    'stop_loss': 0.0,
-                    'take_profit': 0.0,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'take_profits': normalized_tps,
                     'status': 'executed',
                     'profit_loss': 0.0
                 }
@@ -372,12 +493,64 @@ class MultiChatTradingBot:
                     'source': chat_source.chat_name,
                     'demo': True
                 })
+                return demo_result
             else:
                 # TODO: Echten MT5-Trade umsetzen
                 self.log("LIVE-Trading ist aktiv, aber noch nicht implementiert.", "WARNING")
 
         except Exception as e:
             self.log(f"Fehler bei Signal-Ausführung: {e}", "ERROR")
+        return None
+
+    async def apply_trade_update(self, chat_source: ChatSource, update_signal: Dict):
+        """Offene Trades mit SL/TP aus nachfolgenden Nachrichten aktualisieren"""
+        pending = self.pending_trade_updates.get(chat_source.chat_id)
+
+        target_ticket = None
+        if pending:
+            target_ticket = pending['ticket']
+        else:
+            last_trade = self.trade_tracker.get_last_trade_for_chat(chat_source.chat_id)
+            if last_trade:
+                target_ticket = last_trade.ticket
+
+        if not target_ticket:
+            self.log(f"Keine offene Order für Update aus {chat_source.chat_name} gefunden.", "WARNING")
+            return
+
+        stop_loss = update_signal.get('stop_loss')
+        take_profits = update_signal.get('take_profits') or []
+
+        record = self.trade_tracker.update_trade_levels(
+            target_ticket,
+            stop_loss=stop_loss,
+            take_profits=take_profits
+        )
+
+        if not record:
+            self.log(f"Trade {target_ticket} konnte nicht aktualisiert werden.", "WARNING")
+            return
+
+        self.log(
+            f"Trade {record.ticket} aktualisiert: SL={record.stop_loss:.2f} TP={record.take_profit:.2f}"
+        )
+
+        self.send_message('TRADE_UPDATED', {
+            'ticket': record.ticket,
+            'symbol': record.symbol,
+            'stop_loss': record.stop_loss,
+            'take_profit': record.take_profit,
+            'take_profits': take_profits,
+            'source': chat_source.chat_name
+        })
+
+        if pending:
+            if stop_loss is not None:
+                pending['awaiting_sl'] = False
+            if take_profits:
+                pending['awaiting_tp'] = False
+            if not pending['awaiting_sl'] and not pending['awaiting_tp']:
+                self.pending_trade_updates.pop(chat_source.chat_id, None)
 
     async def load_all_chats(self):
         """Alle verfügbaren Chats laden"""
