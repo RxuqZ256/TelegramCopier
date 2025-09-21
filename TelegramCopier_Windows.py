@@ -690,6 +690,10 @@ class TradingGUI:
 
         # Bot-Instanz (setzt später Config/Setup)
         self.bot = MultiChatTradingBot(None, None, None)
+        self.bot_starting = False
+
+        # Buttons (werden in create_widgets gesetzt)
+        self.start_button: Optional[ttk.Button] = None
 
         # GUI-Komponenten
         self.create_widgets()
@@ -723,7 +727,8 @@ class TradingGUI:
         button_frame = ttk.Frame(self.status_frame)
         button_frame.pack(side='right')
 
-        ttk.Button(button_frame, text="Bot starten", command=self.start_bot).pack(side='left', padx=(0, 5))
+        self.start_button = ttk.Button(button_frame, text="Bot starten", command=self.start_bot)
+        self.start_button.pack(side='left', padx=(0, 5))
         ttk.Button(button_frame, text="Bot stoppen", command=self.stop_bot).pack(side='left')
 
     def create_chat_management_tab(self):
@@ -912,6 +917,13 @@ class TradingGUI:
 
     def start_bot(self):
         """Bot starten"""
+        if self.bot.is_running or self.bot_starting:
+            return
+
+        self.bot_starting = True
+        if self.start_button:
+            self.start_button.config(state='disabled')
+
         def run_bot():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -919,13 +931,11 @@ class TradingGUI:
             try:
                 started = loop.run_until_complete(self.bot.start())
                 if started:
-                    self.root.after(0, lambda: self.status_label.config(text="Bot läuft"))
+                    self.root.after(0, self.after_bot_started)
                 else:
-                    self.root.after(0, lambda: self.log_message(
-                        "Bot konnte nicht gestartet werden. Bitte prüfen Sie die Telegram-Konfiguration."
-                    ))
+                    self.root.after(0, self.handle_bot_start_failure)
             except Exception as e:
-                self.root.after(0, lambda: self.log_message(f"Bot-Start-Fehler: {e}"))
+                self.root.after(0, lambda e=e: self.handle_bot_start_exception(e))
             finally:
                 if started:
                     # run_until_disconnected läuft in eigenem Task; Loop offen halten:
@@ -937,6 +947,25 @@ class TradingGUI:
 
         threading.Thread(target=run_bot, daemon=True).start()
 
+    def after_bot_started(self):
+        """Aktionen nach erfolgreichem Start"""
+        self.status_label.config(text="Bot läuft")
+        self.bot_starting = False
+        if self.start_button:
+            self.start_button.config(state='normal')
+
+    def handle_bot_start_failure(self):
+        """Fehler beim Starten behandeln"""
+        self.log_message(
+            "Bot konnte nicht gestartet werden. Bitte prüfen Sie die Telegram-Konfiguration."
+        )
+        self.after_bot_stopped()
+
+    def handle_bot_start_exception(self, error: Exception):
+        """Ausnahme beim Starten behandeln"""
+        self.log_message(f"Bot-Start-Fehler: {error}")
+        self.after_bot_stopped()
+
     def stop_bot(self):
         """Bot stoppen"""
         self.bot.is_running = False
@@ -946,7 +975,14 @@ class TradingGUI:
                 self.bot.client.disconnect()
             except Exception:
                 pass
+        self.after_bot_stopped()
+
+    def after_bot_stopped(self):
+        """Aktionen nach dem Stoppen"""
         self.status_label.config(text="Bot gestoppt")
+        self.bot_starting = False
+        if self.start_button:
+            self.start_button.config(state='normal')
 
     def setup_message_processing(self):
         """Message Queue Processing"""
