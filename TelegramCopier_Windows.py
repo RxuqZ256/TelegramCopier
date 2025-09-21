@@ -295,6 +295,8 @@ class SignalProcessor:
             'sell_zone': r'(?i)\b(gold|xau|eurusd|eur|gbpusd|gbp|usdjpy|usd)\b.*\bsell\b\s+([0-9]+\.?[0-9]*)'
         }
 
+        self.auto_tp_sl: bool = True
+
     def _parse_price(self, value: str) -> Optional[float]:
         try:
             normalized = value.replace(',', '.').strip()
@@ -322,8 +324,8 @@ class SignalProcessor:
         if not message_text:
             return None
 
-        stop_loss = self.extract_stop_loss(message_text)
-        take_profits = self.extract_take_profits(message_text)
+        stop_loss = self.extract_stop_loss(message_text) if self.auto_tp_sl else None
+        take_profits = self.extract_take_profits(message_text) if self.auto_tp_sl else []
 
         # Buy Now
         match = re.search(self.patterns['buy_now'], message_text)
@@ -357,7 +359,45 @@ class SignalProcessor:
                 'take_profits': take_profits
             }
 
-        if stop_loss is not None or take_profits:
+        # Buy Zone
+        match = re.search(self.patterns['buy_zone'], message_text)
+        if match:
+            base = match.group(1).upper()
+            symbol = self.symbol_mapping.get(base, base)
+            entry_price = self._parse_price(match.group(2))
+            if entry_price is not None:
+                return {
+                    'kind': 'trade',
+                    'type': 'zone',
+                    'action': 'BUY',
+                    'symbol': symbol,
+                    'entry_price': entry_price,
+                    'source': chat_source.chat_name,
+                    'execution_mode': ExecutionMode.ZONE_WAIT,
+                    'stop_loss': stop_loss,
+                    'take_profits': take_profits
+                }
+
+        # Sell Zone
+        match = re.search(self.patterns['sell_zone'], message_text)
+        if match:
+            base = match.group(1).upper()
+            symbol = self.symbol_mapping.get(base, base)
+            entry_price = self._parse_price(match.group(2))
+            if entry_price is not None:
+                return {
+                    'kind': 'trade',
+                    'type': 'zone',
+                    'action': 'SELL',
+                    'symbol': symbol,
+                    'entry_price': entry_price,
+                    'source': chat_source.chat_name,
+                    'execution_mode': ExecutionMode.ZONE_WAIT,
+                    'stop_loss': stop_loss,
+                    'take_profits': take_profits
+                }
+
+        if self.auto_tp_sl and (stop_loss is not None or take_profits):
             return {
                 'kind': 'update',
                 'stop_loss': stop_loss,
@@ -408,6 +448,11 @@ class MultiChatTradingBot:
         self.max_spread_pips: float = 3.0
         self.risk_percent: float = 2.0
         self.max_trades_per_hour: int = 5
+
+        # Signal- und Sicherheitsflags
+        self.instant_trading_enabled: bool = True
+        self.zone_trading_enabled: bool = True
+        self.require_confirmation: bool = True
 
         # Zugangsdaten anwenden (falls vorhanden)
         self.update_credentials(api_id, api_hash, phone, session_name=session_name)
@@ -665,20 +710,71 @@ class MultiChatTradingBot:
             if signal:
                 kind = signal.get('kind', 'trade')
                 if kind == 'trade':
-                    if self.execution_mode == ExecutionMode.DISABLED:
+                    signal_type = signal.get('type', 'instant')
+                    action = (signal.get('action') or '').upper()
+                    symbol = signal.get('symbol', 'Unbekannt')
+
+                    if signal_type == 'instant' and not self.instant_trading_enabled:
+                        self.log(
+                            (
+                                f"Sofort-Trading deaktiviert - "
+                                f"{action or 'Signal'} {symbol} von {chat_source.chat_name} ignoriert."
+                            ),
+                            "INFO"
+                        )
+                        return
+
+                    if signal_type == 'zone' and not self.zone_trading_enabled:
+                        self.log(
+                            (
+                                f"Zonen-Trading deaktiviert - "
+                                f"{action or 'Signal'} {symbol} von {chat_source.chat_name} ignoriert."
+                            ),
+                            "INFO"
+                        )
+                        return
+
+                    execution_mode = self._determine_execution_mode(signal)
+                    if execution_mode == ExecutionMode.DISABLED:
                         self.log(
                             f"Trading deaktiviert - Signal von {chat_source.chat_name} ignoriert.",
                             "INFO"
                         )
                         return
 
+                    if self.require_confirmation:
+                        self.log(
+                            (
+                                f"Bestätigung erforderlich für Signal aus {chat_source.chat_name}: "
+                                f"{action or 'TRADE'} {symbol}."
+                            ),
+                            "INFO"
+                        )
+                        confirmed = await self.request_trade_confirmation(
+                            signal,
+                            chat_source,
+                            message_text
+                        )
+                        if not confirmed:
+                            self.log(
+                                f"Signal von {chat_source.chat_name} abgelehnt.",
+                                "INFO"
+                            )
+                            return
+                        else:
+                            self.log(
+                                f"Signal von {chat_source.chat_name} bestätigt. Ausführung startet.",
+                                "INFO"
+                            )
+
                     trade_result = await self.execute_signal(signal, chat_source, message_text)
                     if trade_result and trade_result.get('status') == 'executed':
+                        auto_levels = getattr(self.signal_processor, 'auto_tp_sl', True)
                         pending_info = {
                             'ticket': trade_result['ticket'],
                             'symbol': trade_result['symbol'],
-                            'awaiting_sl': signal.get('stop_loss') is None,
-                            'awaiting_tp': not signal.get('take_profits'),
+                            'awaiting_sl': auto_levels and signal.get('stop_loss') is None,
+                            'awaiting_tp': auto_levels and not signal.get('take_profits'),
                             'timestamp': datetime.now()
                         }
                         if pending_info['awaiting_sl'] or pending_info['awaiting_tp']:
@@ -715,9 +811,61 @@ class MultiChatTradingBot:
                     continue
         return None
 
+    def _determine_execution_mode(self, signal: Dict) -> ExecutionMode:
+        """Ermittelt den effektiven Ausführungsmodus für ein Signal."""
+        mode = signal.get('execution_mode')
+        if isinstance(mode, ExecutionMode):
+            return mode
+        if isinstance(mode, str):
+            try:
+                return ExecutionMode(mode)
+            except ValueError:
+                pass
+        return self.execution_mode
+
+    async def request_trade_confirmation(
+        self,
+        signal: Dict,
+        chat_source: ChatSource,
+        original_message: str
+    ) -> bool:
+        """Fragt die GUI nach einer Trade-Bestätigung und wartet auf die Antwort."""
+
+        confirmation_future: Future = Future()
+        try:
+            self.send_message(
+                'CONFIRM_TRADE',
+                {
+                    'signal': signal,
+                    'chat_name': chat_source.chat_name,
+                    'chat_id': chat_source.chat_id,
+                    'message': original_message,
+                    'future': confirmation_future
+                }
+            )
+        except Exception as exc:
+            self.log(f"Bestätigungsanfrage konnte nicht gesendet werden: {exc}", "ERROR")
+            return False
+
+        try:
+            result = await asyncio.wrap_future(confirmation_future)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.log(f"Fehler beim Warten auf die Trade-Bestätigung: {exc}", "ERROR")
+            return False
+        return bool(result)
+
     async def execute_signal(self, signal: Dict, chat_source: ChatSource, original_message: str):
         """Signal ausführen (Demo oder Live)"""
         try:
+            execution_mode = self._determine_execution_mode(signal)
+            entry_price_raw = signal.get('entry_price')
+            try:
+                entry_price = float(entry_price_raw) if entry_price_raw is not None else None
+            except (TypeError, ValueError):
+                entry_price = None
+
             stop_loss_value = signal.get('stop_loss')
             stop_loss = float(stop_loss_value) if stop_loss_value is not None else 0.0
             take_profits_raw = signal.get('take_profits') or []
@@ -748,17 +896,17 @@ class MultiChatTradingBot:
                 'lot_size': lot_size
             }
 
-            if self.execution_mode == ExecutionMode.DISABLED:
+            if execution_mode == ExecutionMode.DISABLED:
                 self.log(
                     f"Ausführungsmodus 'Ausgeschaltet': Signal von {chat_source.chat_name} wird ignoriert.",
                     "INFO"
                 )
                 return None
 
-            if self.execution_mode == ExecutionMode.ZONE_WAIT:
+            if execution_mode == ExecutionMode.ZONE_WAIT:
                 pending_result = {
                     'ticket': f"PENDING_{int(datetime.now().timestamp())}",
-                    'price': 0.0,
+                    'price': entry_price if entry_price is not None else 0.0,
                     'status': 'pending',
                     'profit_loss': 0.0,
                     **base_trade_info
@@ -801,9 +949,11 @@ class MultiChatTradingBot:
                     return None
 
             if self.demo_mode or not MT5_AVAILABLE:
+                default_price = 1.0850 if 'EUR' in signal['symbol'] else 2660.00
+                price = entry_price if entry_price is not None else default_price
                 demo_result = {
                     'ticket': f"DEMO_{int(datetime.now().timestamp())}",
-                    'price': 1.0850 if 'EUR' in signal['symbol'] else 2660.00,
+                    'price': price,
                     'lot_size': lot_size,
                     'status': 'executed',
                     'profit_loss': 0.0,
@@ -1153,6 +1303,50 @@ class TradingGUI:
             'max_trades_per_hour': (self.max_trades_per_hour_var, int)
         }
 
+        signals_defaults = self.config_manager.default_config.get('signals', {})
+        initial_signals_cfg = self.current_config.get('signals', {})
+        self._updating_signal_flags = False
+        self.instant_trading_var = tk.BooleanVar(
+            master=self.root,
+            value=self._coerce_to_bool(
+                initial_signals_cfg.get('instant_trading_enabled'),
+                signals_defaults.get('instant_trading_enabled', True)
+            )
+        )
+        self.zone_trading_var = tk.BooleanVar(
+            master=self.root,
+            value=self._coerce_to_bool(
+                initial_signals_cfg.get('zone_trading_enabled'),
+                signals_defaults.get('zone_trading_enabled', True)
+            )
+        )
+        self.require_confirmation_var = tk.BooleanVar(
+            master=self.root,
+            value=self._coerce_to_bool(
+                initial_signals_cfg.get('require_confirmation'),
+                signals_defaults.get('require_confirmation', True)
+            )
+        )
+        self.auto_tp_sl_var = tk.BooleanVar(
+            master=self.root,
+            value=self._coerce_to_bool(
+                initial_signals_cfg.get('auto_tp_sl'),
+                signals_defaults.get('auto_tp_sl', True)
+            )
+        )
+        self._signal_flag_vars = {
+            'instant_trading_enabled': self.instant_trading_var,
+            'zone_trading_enabled': self.zone_trading_var,
+            'require_confirmation': self.require_confirmation_var,
+            'auto_tp_sl': self.auto_tp_sl_var
+        }
+        self._signal_flag_labels = {
+            'instant_trading_enabled': 'Sofort-Trading',
+            'zone_trading_enabled': 'Zonen-Trading',
+            'require_confirmation': 'Bestätigungspflicht',
+            'auto_tp_sl': 'Automatische SL/TP-Erkennung'
+        }
+
         # Bot-Instanz (setzt später Config/Setup)
         self.bot = MultiChatTradingBot(None, None, None)
         self.bot_starting = False
@@ -1487,6 +1681,44 @@ class TradingGUI:
             style='Warning.TLabel'
         )
         warning_label.grid(row=1, column=0, columnspan=3, sticky='w', pady=(14, 0))
+
+        signal_settings_frame = ttk.Frame(settings_tab, style='Card.TFrame', padding=(20, 18))
+        signal_settings_frame.pack(fill='x', pady=(0, 18))
+        signal_settings_frame.columnconfigure((0, 1), weight=1)
+
+        ttk.Label(
+            signal_settings_frame,
+            text="Signal-Optionen:",
+            style='FieldLabel.TLabel'
+        ).grid(row=0, column=0, columnspan=2, sticky='w')
+
+        ttk.Checkbutton(
+            signal_settings_frame,
+            text="Sofort-Trading aktiv",
+            variable=self.instant_trading_var,
+            command=lambda key='instant_trading_enabled': self._handle_signal_flag_change(key)
+        ).grid(row=1, column=0, sticky='w', pady=(10, 4))
+
+        ttk.Checkbutton(
+            signal_settings_frame,
+            text="Zonen-Trading aktiv",
+            variable=self.zone_trading_var,
+            command=lambda key='zone_trading_enabled': self._handle_signal_flag_change(key)
+        ).grid(row=1, column=1, sticky='w', pady=(10, 4), padx=(12, 0))
+
+        ttk.Checkbutton(
+            signal_settings_frame,
+            text="Bestätigung vor Ausführung",
+            variable=self.require_confirmation_var,
+            command=lambda key='require_confirmation': self._handle_signal_flag_change(key)
+        ).grid(row=2, column=0, sticky='w', pady=(4, 0))
+
+        ttk.Checkbutton(
+            signal_settings_frame,
+            text="SL/TP automatisch erkennen",
+            variable=self.auto_tp_sl_var,
+            command=lambda key='auto_tp_sl': self._handle_signal_flag_change(key)
+        ).grid(row=2, column=1, sticky='w', pady=(4, 0), padx=(12, 0))
 
         numeric_frame = ttk.Frame(settings_tab, style='Card.TFrame', padding=(20, 18))
         numeric_frame.pack(fill='x', pady=(0, 18))
@@ -1904,6 +2136,8 @@ class TradingGUI:
                             0,
                             lambda msg=info_message: self.show_auth_required_dialog(msg)
                         )
+                    elif msg_type == 'CONFIRM_TRADE':
+                        self._handle_trade_confirmation_request(data)
 
             except queue.Empty:
                 pass
@@ -1911,6 +2145,82 @@ class TradingGUI:
             self.root.after(100, process_messages)
 
         process_messages()
+
+    def _handle_trade_confirmation_request(self, data):
+        """Zeigt einen Bestätigungsdialog für eingehende Trades an."""
+
+        if not isinstance(data, dict):
+            return
+
+        future = data.get('future')
+        signal = data.get('signal') or {}
+        chat_name = data.get('chat_name', 'Unbekannt')
+        original_message = data.get('message') or ''
+
+        action = (signal.get('action') or 'TRADE').upper()
+        symbol = signal.get('symbol', 'Unbekannt')
+        entry_price = signal.get('entry_price')
+        stop_loss = signal.get('stop_loss')
+        take_profits = signal.get('take_profits') or []
+
+        def _format_price(value) -> str:
+            try:
+                return f"{float(value):.5f}"
+            except (TypeError, ValueError):
+                return str(value)
+
+        detail_parts = []
+        if action and symbol:
+            detail_parts.append(f"{action} {symbol}")
+        elif symbol:
+            detail_parts.append(str(symbol))
+        elif action:
+            detail_parts.append(str(action))
+
+        if entry_price is not None:
+            detail_parts.append(f"@ {_format_price(entry_price)}")
+
+        detail_text = ' '.join(part for part in detail_parts if part).strip()
+
+        level_lines = []
+        if stop_loss is not None:
+            level_lines.append(f"SL: {_format_price(stop_loss)}")
+        if take_profits:
+            formatted_tps = ', '.join(_format_price(tp) for tp in take_profits)
+            level_lines.append(f"TPs: {formatted_tps}")
+
+        preview_text = original_message.strip()
+        if preview_text and len(preview_text) > 400:
+            preview_text = preview_text[:397] + '...'
+
+        prompt_lines = [f"Neues Signal von {chat_name}"]
+        if detail_text:
+            prompt_lines.append(detail_text)
+        if level_lines:
+            prompt_lines.extend(level_lines)
+        if preview_text:
+            prompt_lines.append('')
+            prompt_lines.append('Originalnachricht:')
+            prompt_lines.append(preview_text)
+
+        prompt = '\n'.join(prompt_lines)
+
+        confirmed = False
+        try:
+            confirmed = bool(
+                messagebox.askyesno(
+                    "Trade bestätigen",
+                    prompt,
+                    parent=self.root
+                )
+            )
+        except Exception as exc:
+            self.log_message(f"Fehler beim Anzeigen des Bestätigungsdialogs: {exc}")
+            confirmed = False
+        finally:
+            future_obj = future if isinstance(future, Future) else None
+            if future_obj and not future_obj.done():
+                future_obj.set_result(bool(confirmed))
 
     def apply_config(self, config: Dict):
         """Konfiguration auf Bot und GUI anwenden"""
@@ -1979,6 +2289,22 @@ class TradingGUI:
         self.bot.risk_percent = sanitized_values['risk_percent']
         self.bot.max_trades_per_hour = sanitized_values['max_trades_per_hour']
 
+        signal_defaults = self.config_manager.default_config.get('signals', {})
+        signals_cfg = self.current_config.setdefault('signals', {})
+
+        self._updating_signal_flags = True
+        try:
+            for key, var in self._signal_flag_vars.items():
+                target_value = self._coerce_to_bool(
+                    signals_cfg.get(key, signal_defaults.get(key, True)),
+                    signal_defaults.get(key, True)
+                )
+                var.set(target_value)
+                signals_cfg[key] = target_value
+                self._apply_signal_flag_to_bot(key, target_value)
+        finally:
+            self._updating_signal_flags = False
+
     def log_message(self, message):
         """Log-Nachricht in GUI anzeigen"""
         self.log_text.insert('end', f"{message}\n")
@@ -2033,6 +2359,56 @@ class TradingGUI:
             self.config_manager.save_config(self.current_config)
         except Exception as exc:
             self.log_message(f"Fehler beim Speichern der Trading-Einstellungen: {exc}")
+
+    def _apply_signal_flag_to_bot(self, key: str, value: bool):
+        """Aktualisiert die entsprechenden Flags auf dem Bot."""
+        value = bool(value)
+        if key == 'auto_tp_sl':
+            signal_processor = getattr(self.bot, 'signal_processor', None)
+            if signal_processor is not None:
+                signal_processor.auto_tp_sl = value
+        elif key == 'instant_trading_enabled':
+            self.bot.instant_trading_enabled = value
+        elif key == 'zone_trading_enabled':
+            self.bot.zone_trading_enabled = value
+        elif key == 'require_confirmation':
+            self.bot.require_confirmation = value
+
+    def _handle_signal_flag_change(self, key: str):
+        """Callback für Checkbuttons der Signal-Konfiguration."""
+        if self._updating_signal_flags:
+            return
+
+        var = self._signal_flag_vars.get(key)
+        if var is None:
+            return
+
+        try:
+            value = bool(var.get())
+        except tk.TclError:
+            return
+
+        signals_cfg = self.current_config.setdefault('signals', {})
+        defaults = self.config_manager.default_config.get('signals', {})
+        previous_value = self._coerce_to_bool(
+            signals_cfg.get(key, defaults.get(key, True)),
+            defaults.get(key, True)
+        )
+
+        signals_cfg[key] = value
+        self._apply_signal_flag_to_bot(key, value)
+
+        if previous_value == value:
+            return
+
+        try:
+            self.config_manager.save_config(self.current_config)
+        except Exception as exc:
+            self.log_message(f"Fehler beim Speichern der Signal-Einstellungen: {exc}")
+        else:
+            label = self._signal_flag_labels.get(key, key)
+            state_text = "aktiviert" if value else "deaktiviert"
+            self.log_message(f"{label} wurde {state_text}.")
 
     def _validate_float_value(self, proposed: str, min_value: str, _setting_key: str) -> bool:
         """Validiert Float-Eingaben für Spinboxen."""
@@ -2107,6 +2483,20 @@ class TradingGUI:
                     return int(default)
                 except (TypeError, ValueError):
                     return 0
+
+    def _coerce_to_bool(self, value, default: bool) -> bool:
+        """Hilfsfunktion zur Bool-Konvertierung."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {'1', 'true', 'wahr', 'yes', 'ja', 'y', 'on'}:
+                return True
+            if lowered in {'0', 'false', 'falsch', 'no', 'nein', 'n', 'off'}:
+                return False
+        if isinstance(value, (int, float)):
+            return bool(value)
+        return bool(default)
 
     def show_auth_required_dialog(self, message: str):
         """Dialog anzeigen, wenn ein Login-Code erforderlich ist."""
