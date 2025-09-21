@@ -9,10 +9,11 @@ import re
 import json
 import queue
 import threading
+from concurrent.futures import Future
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Awaitable
 
 # ---- optionale Abhängigkeit: MetaTrader5 (nur für Windows verfügbar) ----
 try:
@@ -387,16 +388,34 @@ class MultiChatTradingBot:
         # Telegram Client (initially None until gültige Zugangsdaten vorhanden)
         self.client: Optional[TelegramClient] = None
 
-        # Zugangsdaten anwenden (falls vorhanden)
-        self.update_credentials(api_id, api_hash, phone, session_name=session_name)
-
         # Message Queue für GUI
         self.message_queue: "queue.Queue" = queue.Queue()
+
+        # Eigene Async-Eventloop für alle Telegram-Operationen
+        self.loop = asyncio.new_event_loop()
+        self._loop_ready = threading.Event()
+        self.loop_thread = threading.Thread(target=self._run_async_loop, daemon=True)
+        self.loop_thread.start()
 
         # Status
         self.is_running = False
         self.demo_mode = True  # Immer mit Demo starten!
         self.pending_trade_updates: Dict[int, Dict] = {}
+
+        # Zugangsdaten anwenden (falls vorhanden)
+        self.update_credentials(api_id, api_hash, phone, session_name=session_name)
+
+    def _run_async_loop(self):
+        """Startet den dedizierten Async-Loop für alle Telegram-Aufgaben."""
+        asyncio.set_event_loop(self.loop)
+        self._loop_ready.set()
+        self.loop.run_forever()
+
+    def submit_coroutine(self, coro: Awaitable) -> Future:
+        """Plant eine Coroutine auf dem internen Eventloop ein."""
+        if not self._loop_ready.is_set():
+            self._loop_ready.wait()
+        return asyncio.run_coroutine_threadsafe(coro, self.loop)
 
     def update_credentials(self, api_id: Optional[str], api_hash: Optional[str], phone: Optional[str],
                            session_name: Optional[str] = None):
@@ -407,7 +426,13 @@ class MultiChatTradingBot:
 
         # Vorherige Client-Instanz verwerfen
         if self.client:
-            self.client = None
+            try:
+                future = self.submit_coroutine(self.client.disconnect())
+                future.result(timeout=10)
+            except Exception:
+                pass
+            finally:
+                self.client = None
 
         try:
             self.api_id = int(api_id) if api_id else 0
@@ -419,7 +444,12 @@ class MultiChatTradingBot:
 
         if self.api_id and self.api_hash:
             # Nur erstellen, wenn gültige Daten vorhanden sind
-            self.client = TelegramClient(self.session_name, self.api_id, self.api_hash)
+            self.client = TelegramClient(
+                self.session_name,
+                self.api_id,
+                self.api_hash,
+                loop=self.loop
+            )
 
     async def ensure_connected(self) -> bool:
         """Stellt sicher, dass der Telegram-Client verbunden ist."""
@@ -1445,15 +1475,12 @@ class TradingGUI:
         """Chats laden (async wrapper)"""
 
         def run_async():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
             try:
-                chats = loop.run_until_complete(self.bot.load_all_chats())
+                future = self.bot.submit_coroutine(self.bot.load_all_chats())
+                chats = future.result()
                 self.root.after(0, lambda: self.update_chat_list(chats))
             except Exception as e:
                 self.root.after(0, lambda: self.log_message(f"Fehler beim Laden: {e}"))
-            finally:
-                loop.close()
 
         threading.Thread(target=run_async, daemon=True).start()
 
@@ -1574,25 +1601,16 @@ class TradingGUI:
             self.start_button.config(state='disabled')
 
         def run_bot():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
             started = False
             try:
-                started = loop.run_until_complete(self.bot.start())
+                future = self.bot.submit_coroutine(self.bot.start())
+                started = future.result()
                 if started:
                     self.root.after(0, self.after_bot_started)
                 else:
                     self.root.after(0, self.handle_bot_start_failure)
             except Exception as e:
                 self.root.after(0, lambda e=e: self.handle_bot_start_exception(e))
-            finally:
-                if started:
-                    # run_until_disconnected läuft in eigenem Task; Loop offen halten:
-                    try:
-                        loop.run_forever()
-                    except Exception:
-                        pass
-                loop.close()
 
         threading.Thread(target=run_bot, daemon=True).start()
 
@@ -1618,10 +1636,11 @@ class TradingGUI:
     def stop_bot(self):
         """Bot stoppen"""
         self.bot.is_running = False
-        if self.bot.client:
+        client = self.bot.client
+        if client:
             try:
-                # Client sauber trennen
-                self.bot.client.disconnect()
+                future = self.bot.submit_coroutine(client.disconnect())
+                future.result(timeout=10)
             except Exception:
                 pass
         self.after_bot_stopped()
@@ -1716,15 +1735,12 @@ class TradingGUI:
         """Login-Code asynchron prüfen."""
 
         def run_verification():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
             try:
-                result = loop.run_until_complete(self.bot.complete_login_with_code(code))
+                future = self.bot.submit_coroutine(self.bot.complete_login_with_code(code))
+                result = future.result()
                 self.root.after(0, lambda res=result: self.handle_login_code_result(res))
             except Exception as e:
                 self.root.after(0, lambda err=e: self.handle_login_code_exception(err))
-            finally:
-                loop.close()
 
         threading.Thread(target=run_verification, daemon=True).start()
 
