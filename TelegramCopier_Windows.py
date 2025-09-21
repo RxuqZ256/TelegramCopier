@@ -593,7 +593,12 @@ class MultiChatTradingBot:
         if not self.client:
             self.log("Telegram-Konfiguration fehlt. Chats können nicht geladen werden.", "ERROR")
             return chats_data
+
         try:
+            # Verbindung sicherstellen – iter_dialogs schlägt sonst mit "disconnected" fehl
+            if not self.client.is_connected():
+                await self.client.connect()
+
             async for dialog in self.client.iter_dialogs(limit=200):
                 chat_info = {
                     'id': dialog.id,
@@ -801,11 +806,11 @@ class TradingGUI:
 
     def load_chats(self):
         """Chats laden (async wrapper)"""
+
         def run_async():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                loop.run_until_complete(self.bot.load_all_chats())
                 chats = loop.run_until_complete(self.bot.load_all_chats())
                 self.root.after(0, lambda: self.update_chat_list(chats))
             except Exception as e:
