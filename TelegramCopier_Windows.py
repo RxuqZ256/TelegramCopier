@@ -879,7 +879,7 @@ class ApiCredentialDialog(simpledialog.Dialog):
         api_id_entry.grid(row=1, column=1, sticky='we', padx=(0, 10), pady=(0, 8))
 
         ttk.Label(master, text="API Hash:").grid(row=2, column=0, sticky='e', padx=(10, 5), pady=(0, 8))
-        api_hash_entry = ttk.Entry(master, textvariable=self.api_hash_var, show='*')
+        api_hash_entry = ttk.Entry(master, textvariable=self.api_hash_var)
         api_hash_entry.grid(row=2, column=1, sticky='we', padx=(0, 10), pady=(0, 8))
 
         ttk.Label(master, text="Telefonnummer (+49...):").grid(row=3, column=0, sticky='e', padx=(10, 5), pady=(0, 8))
@@ -1818,7 +1818,7 @@ class SetupAssistant:
 
         ttk.Label(form_frame, text="API Hash:").pack(anchor='w')
         self.setup_api_hash = tk.StringVar(value=str(telegram_cfg.get('api_hash', "")))
-        ttk.Entry(form_frame, textvariable=self.setup_api_hash, width=40, show='*').pack(fill='x', pady=(0, 10))
+        ttk.Entry(form_frame, textvariable=self.setup_api_hash, width=40).pack(fill='x', pady=(0, 10))
 
         ttk.Label(form_frame, text="Telefonnummer (mit Ländercode, z.B. +49...):").pack(anchor='w')
         self.setup_phone = tk.StringVar(value=str(telegram_cfg.get('phone', "")))
