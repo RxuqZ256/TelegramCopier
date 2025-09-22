@@ -4,6 +4,7 @@
 # Start:  python TelegramCopier_Windows.py
 
 import asyncio
+import math
 import os
 import re
 import json
@@ -1754,6 +1755,13 @@ class TradingGUI:
                 trading_defaults.get('max_trades_per_hour', 0)
             )
         )
+        self.demo_var = tk.BooleanVar(
+            master=self.root,
+            value=self._coerce_to_bool(
+                initial_trading_cfg.get('demo_mode'),
+                trading_defaults.get('demo_mode', True)
+            )
+        )
         self._float_validate_cmd = self.root.register(self._validate_float_value)
         self._int_validate_cmd = self.root.register(self._validate_int_value)
         self._trading_var_map = {
@@ -1829,6 +1837,58 @@ class TradingGUI:
         self.mt5_status_message_var: Optional[tk.StringVar] = None
         self.mt5_status_label: Optional[ttk.Label] = None
 
+        # Dashboard & UI helper states
+        self.hero_status_var: Optional[tk.StringVar] = None
+        self.dashboard_state_var: Optional[tk.StringVar] = None
+        self.dashboard_alert_var: Optional[tk.StringVar] = None
+        self.open_signal_percentage_var: Optional[tk.StringVar] = None
+        self.open_signal_active_var: Optional[tk.StringVar] = None
+        self.dashboard_drawdown_var: Optional[tk.StringVar] = None
+        self.dashboard_daily_loss_var: Optional[tk.StringVar] = None
+        self.dashboard_compliance_var: Optional[tk.StringVar] = None
+        self.chat_total_var: Optional[tk.StringVar] = None
+        self.chat_active_var: Optional[tk.StringVar] = None
+        self.chat_signal_sum_var: Optional[tk.StringVar] = None
+        self.chat_last_sync_var: Optional[tk.StringVar] = None
+        self.chat_summary_var: Optional[tk.StringVar] = None
+        self.latency_var: Optional[tk.StringVar] = None
+        self.alert_score_var: Optional[tk.StringVar] = None
+
+        self.automation_rules_container: Optional[ttk.Frame] = None
+        self.exposure_list_frame: Optional[ttk.Frame] = None
+
+        # Statistik- und Diagrammzustände
+        self.stats_sharpe_var: Optional[tk.StringVar] = None
+        self.stats_sortino_var: Optional[tk.StringVar] = None
+        self.stats_drawdown_var: Optional[tk.StringVar] = None
+        self.stats_win_rate_var: Optional[tk.StringVar] = None
+        self.stats_profit_var: Optional[tk.StringVar] = None
+        self.detail_winrate_var: Optional[tk.StringVar] = None
+        self.detail_rr_var: Optional[tk.StringVar] = None
+        self.detail_signals_var: Optional[tk.StringVar] = None
+        self.detail_profit_var: Optional[tk.StringVar] = None
+        self.chat_detail_title_var: Optional[tk.StringVar] = None
+        self.chat_detail_latency_var: Optional[tk.StringVar] = None
+        self.chat_detail_quality_var: Optional[tk.StringVar] = None
+        self.chat_detail_risk_var: Optional[tk.StringVar] = None
+
+        self.equity_curve_canvas: Optional[tk.Canvas] = None
+        self.profit_distribution_canvas: Optional[tk.Canvas] = None
+        self.monthly_heatmap_canvas: Optional[tk.Canvas] = None
+        self.session_heatmap_canvas: Optional[tk.Canvas] = None
+        self.pair_distribution_canvas: Optional[tk.Canvas] = None
+        self.accuracy_gauge_canvas: Optional[tk.Canvas] = None
+
+        self._default_equity_curve = self._generate_equity_curve_series()
+        self._equity_curve_data = list(self._default_equity_curve)
+        self._profit_distribution_data = self._generate_profit_distribution()
+        self._monthly_profit_matrix = self._generate_monthly_profit_matrix()
+        self._default_session_heatmap = self._generate_session_heatmap_matrix()
+        self._default_pair_distribution = [('EUR/USD', 0.6), ('GBP/USD', 0.25), ('XAU/USD', 0.15)]
+        self._current_session_heatmap = [row[:] for row in self._default_session_heatmap]
+        self._current_pair_distribution = list(self._default_pair_distribution)
+        self._current_accuracy_ratio = 0.7
+
         # Bot-Instanz (setzt später Config/Setup)
         self.bot = MultiChatTradingBot(None, None, None)
         self.bot_starting = False
@@ -1850,28 +1910,39 @@ class TradingGUI:
 
     def _configure_styles(self):
         """Globale Styles, Farben und Schriftarten setzen."""
-        base_bg = '#eef1f7'
-        surface_bg = '#ffffff'
-        surface_alt = '#f7f9ff'
-        accent_color = '#3f58ff'
-        accent_hover = '#2c45e6'
-        accent_light = '#e5e9ff'
-        text_color = '#1a2233'
-        subtle_text = '#626c82'
-        border_color = '#d5dbeb'
+        base_bg = '#050b19'
+        surface_bg = '#0d1628'
+        surface_alt = '#111f30'
+        surface_soft = '#091223'
+        accent_color = '#2563ff'
+        accent_hover = '#1d4fe8'
+        accent_light = '#1a2d52'
+        accent_soft = '#1b2d4a'
+        text_color = '#f8fafc'
+        subtle_text = '#8ea1c7'
+        border_color = '#1c2744'
+        success_color = '#34d399'
+        warning_color = '#f97316'
+        danger_color = '#f87171'
+        info_color = '#38bdf8'
 
         self.theme_colors: Dict[str, str] = {
             'base_bg': base_bg,
             'surface_bg': surface_bg,
             'surface_alt': surface_alt,
+            'surface_soft': surface_soft,
             'accent': accent_color,
             'accent_hover': accent_hover,
             'accent_light': accent_light,
+            'accent_soft': accent_soft,
             'text': text_color,
             'subtle_text': subtle_text,
             'border': border_color,
-            'success': '#16a34a',
-            'warning': '#f97316'
+            'success': success_color,
+            'warning': warning_color,
+            'danger': danger_color,
+            'info': info_color,
+            'highlight': '#22d3ee'
         }
 
         self.root.configure(bg=base_bg)
@@ -1898,23 +1969,24 @@ class TradingGUI:
         self.style.configure('TFrame', background=base_bg)
         self.style.configure('Main.TFrame', background=base_bg)
         self.style.configure('Header.TFrame', background=base_bg)
-        self.style.configure('Toolbar.TFrame', background=surface_bg)
+        self.style.configure('Toolbar.TFrame', background=surface_alt)
         self.style.configure('InfoBar.TFrame', background=surface_bg)
-        self.style.configure('Metric.TFrame', background=surface_bg, relief='flat', borderwidth=1)
-        self.style.configure('Card.TFrame', background=surface_bg, relief='flat')
-        self.style.configure('Card.TLabelframe', background=surface_bg, relief='flat', borderwidth=1)
+        self.style.configure('Metric.TFrame', background=surface_bg, relief='flat', borderwidth=0)
+        self.style.configure('Card.TFrame', background=surface_bg, relief='flat', borderwidth=0)
+        self.style.configure('GlassCard.TFrame', background=surface_alt, relief='flat', borderwidth=0)
+        self.style.configure('Card.TLabelframe', background=surface_bg, relief='flat', borderwidth=1, bordercolor=border_color)
         self.style.configure('Card.TLabelframe.Label', background=surface_bg, foreground=text_color, font=('Segoe UI Semibold', 11))
 
-        self.style.configure('Hero.TFrame', background=accent_color)
-        self.style.configure('HeroTitle.TLabel', background=accent_color, foreground='#ffffff', font=('Segoe UI Semibold', 20))
-        self.style.configure('HeroSubtitle.TLabel', background=accent_color, foreground='#d8deff', font=('Segoe UI', 11))
-        self.style.configure('HeroTag.TLabel', background='#556cff', foreground='#ffffff', font=('Segoe UI Semibold', 10), padding=(12, 4))
+        self.style.configure('Hero.TFrame', background='#101b33')
+        self.style.configure('HeroTitle.TLabel', background='#101b33', foreground=text_color, font=('Segoe UI Semibold', 22))
+        self.style.configure('HeroSubtitle.TLabel', background='#101b33', foreground=subtle_text, font=('Segoe UI', 11))
+        self.style.configure('HeroTag.TLabel', background='#1a2f52', foreground=info_color, font=('Segoe UI Semibold', 10), padding=(12, 4))
 
-        self.style.configure('Statusbar.TFrame', background=surface_bg)
-        self.style.configure('Statusbar.TLabel', background=surface_bg, foreground=subtle_text, font=('Segoe UI', 10))
+        self.style.configure('Statusbar.TFrame', background=surface_alt)
+        self.style.configure('Statusbar.TLabel', background=surface_alt, foreground=subtle_text, font=('Segoe UI', 10))
 
         self.style.configure('TNotebook', background=base_bg, borderwidth=0)
-        self.style.configure('TNotebook.Tab', font=('Segoe UI Semibold', 10), padding=(18, 10))
+        self.style.configure('TNotebook.Tab', font=('Segoe UI Semibold', 10), padding=(20, 12), background=base_bg, foreground=subtle_text)
         self.style.map(
             'TNotebook.Tab',
             background=[('selected', surface_bg), ('!selected', base_bg)],
@@ -1924,80 +1996,131 @@ class TradingGUI:
         self.style.configure('TLabel', background=base_bg, foreground=text_color, font=('Segoe UI', 10))
         self.style.configure('Title.TLabel', background=base_bg, foreground=text_color, font=('Segoe UI Semibold', 18))
         self.style.configure('Subtitle.TLabel', background=base_bg, foreground=subtle_text, font=('Segoe UI', 11))
-        self.style.configure('SectionTitle.TLabel', background=base_bg, foreground=text_color, font=('Segoe UI Semibold', 14))
+        self.style.configure('SectionTitle.TLabel', background=base_bg, foreground=text_color, font=('Segoe UI Semibold', 15))
         self.style.configure('Info.TLabel', background=base_bg, foreground=subtle_text, font=('Segoe UI', 10))
         self.style.configure('InfoBar.TLabel', background=surface_bg, foreground=subtle_text, font=('Segoe UI', 10))
         self.style.configure('FieldLabel.TLabel', background=base_bg, foreground=subtle_text, font=('Segoe UI', 10))
-        self.style.configure('Warning.TLabel', background=base_bg, foreground=self.theme_colors['warning'], font=('Segoe UI Semibold', 11))
-        self.style.configure('Success.TLabel', background=base_bg, foreground=self.theme_colors['success'], font=('Segoe UI Semibold', 11))
+        self.style.configure('Warning.TLabel', background=base_bg, foreground=warning_color, font=('Segoe UI Semibold', 11))
+        self.style.configure('Success.TLabel', background=base_bg, foreground=success_color, font=('Segoe UI Semibold', 11))
+        self.style.configure('Danger.TLabel', background=base_bg, foreground=danger_color, font=('Segoe UI Semibold', 11))
         self.style.configure('MetricTitle.TLabel', background=surface_bg, foreground=subtle_text, font=('Segoe UI', 10))
-        self.style.configure('MetricValue.TLabel', background=surface_bg, foreground=text_color, font=('Segoe UI Semibold', 16))
-        self.style.configure('InfoBadge.TLabel', background=accent_light, foreground=accent_color, font=('Segoe UI Semibold', 9), padding=(10, 3))
+        self.style.configure('MetricValue.TLabel', background=surface_bg, foreground=text_color, font=('Segoe UI Semibold', 18))
+        self.style.configure('MetricPositive.TLabel', background=surface_alt, foreground=success_color, font=('Segoe UI Semibold', 18))
+        self.style.configure('MetricNegative.TLabel', background=surface_alt, foreground=danger_color, font=('Segoe UI Semibold', 18))
+        self.style.configure('CardTitle.TLabel', background=surface_bg, foreground=text_color, font=('Segoe UI Semibold', 13))
+        self.style.configure('CardSubtitle.TLabel', background=surface_bg, foreground=subtle_text, font=('Segoe UI', 10))
+        self.style.configure('GlassCardTitle.TLabel', background=surface_alt, foreground=text_color, font=('Segoe UI Semibold', 13))
+        self.style.configure('GlassCardSubtitle.TLabel', background=surface_alt, foreground=subtle_text, font=('Segoe UI', 10))
+        self.style.configure('InfoBadge.TLabel', background=accent_soft, foreground=info_color, font=('Segoe UI Semibold', 9), padding=(10, 3))
+        self.style.configure('BadgeSuccess.TLabel', background='#0f2a1f', foreground=success_color, font=('Segoe UI Semibold', 10), padding=(10, 4))
+        self.style.configure('BadgeWarning.TLabel', background='#321909', foreground=warning_color, font=('Segoe UI Semibold', 10), padding=(10, 4))
+        self.style.configure('BadgeDanger.TLabel', background='#331316', foreground=danger_color, font=('Segoe UI Semibold', 10), padding=(10, 4))
+        self.style.configure('BadgeInfo.TLabel', background='#112943', foreground=info_color, font=('Segoe UI Semibold', 10), padding=(10, 4))
+        self.style.configure('CardIcon.TLabel', background=surface_bg, foreground=info_color, font=('Segoe UI', 16))
+        self.style.configure('GlassCardIcon.TLabel', background=surface_alt, foreground=info_color, font=('Segoe UI', 16))
 
-        self.style.configure('TButton', font=('Segoe UI', 10), padding=(14, 8), relief='flat')
-        self.style.map('TButton', background=[('active', surface_alt)], relief=[('pressed', 'flat')])
-        self.style.configure('Accent.TButton', background=accent_color, foreground='#ffffff')
+        self.style.configure('TButton', font=('Segoe UI', 10), padding=(16, 9), relief='flat', background=surface_alt, foreground=text_color, borderwidth=0)
+        self.style.map('TButton', background=[('active', accent_light), ('pressed', accent_light)])
+        self.style.configure('Accent.TButton', background=accent_color, foreground='#f8fafc', padding=(18, 10), relief='flat')
         self.style.map(
             'Accent.TButton',
-            background=[('active', accent_hover), ('disabled', base_bg)],
-            foreground=[('disabled', '#b8c3ff')]
+            background=[('active', accent_hover), ('disabled', accent_soft)],
+            foreground=[('disabled', '#4c5c7a')]
         )
-        self.style.configure('Toolbar.TButton', background=surface_bg, foreground=text_color, padding=(12, 8))
-        self.style.map('Toolbar.TButton', background=[('active', accent_light)], foreground=[('active', accent_color)])
-        self.style.configure('Link.TButton', background=base_bg, foreground=accent_color, padding=0)
+        self.style.configure('Toolbar.TButton', background=surface_alt, foreground=text_color, padding=(12, 8))
+        self.style.map('Toolbar.TButton', background=[('active', accent_light)], foreground=[('active', info_color)])
+        self.style.configure('Link.TButton', background=base_bg, foreground=info_color, padding=0)
         self.style.map('Link.TButton', foreground=[('active', accent_hover)])
 
-        self.style.configure('Treeview', background=surface_bg, fieldbackground=surface_bg, foreground=text_color, font=('Segoe UI', 10), rowheight=26, borderwidth=0)
+        self.style.configure('Treeview', background=surface_bg, fieldbackground=surface_bg, foreground=text_color, font=('Segoe UI', 10), rowheight=28, borderwidth=0, relief='flat')
         self.style.configure(
             'Treeview.Heading',
-            background=surface_bg,
+            background=surface_alt,
             foreground=subtle_text,
             font=('Segoe UI Semibold', 10),
             padding=8,
             relief='flat'
         )
-        self.style.configure('Dashboard.Treeview', rowheight=26)
-        self.style.map('Treeview', background=[('selected', accent_light)], foreground=[('selected', accent_color)])
+        self.style.configure('Dashboard.Treeview', rowheight=30)
+        self.style.map('Treeview', background=[('selected', accent_soft)], foreground=[('selected', info_color)])
         self.style.map('Treeview.Heading', background=[('active', accent_light)])
 
         self.style.configure('TCheckbutton', background=base_bg, foreground=text_color, font=('Segoe UI', 10))
         self.style.configure('Switch.TCheckbutton', background=base_bg, foreground=text_color, font=('Segoe UI', 10, 'bold'))
-        self.style.map('Switch.TCheckbutton', foreground=[('selected', accent_color)])
+        self.style.map('Switch.TCheckbutton', foreground=[('selected', info_color)])
 
-        self.style.configure('TEntry', padding=8)
-        self.style.configure('TCombobox', padding=8)
+        entry_style = {
+            'fieldbackground': surface_alt,
+            'background': surface_alt,
+            'foreground': text_color,
+            'bordercolor': surface_alt,
+            'relief': 'flat'
+        }
+        self.style.configure('TEntry', padding=8, **entry_style)
+        self.style.configure('TCombobox', padding=8, **entry_style)
+        self.style.map('TCombobox', fieldbackground=[('readonly', surface_alt)], selectbackground=[('readonly', surface_alt)], selectforeground=[('readonly', text_color)])
+
+        self.style.configure('Accent.Horizontal.TProgressbar', background=accent_color, troughcolor=surface_soft, bordercolor=surface_soft, lightcolor=accent_color, darkcolor=accent_color, thickness=10)
+        self.style.configure('Success.Horizontal.TProgressbar', background=success_color, troughcolor=surface_soft, bordercolor=surface_soft, lightcolor=success_color, darkcolor=success_color, thickness=10)
+        self.style.configure('Warning.Horizontal.TProgressbar', background=warning_color, troughcolor=surface_soft, bordercolor=surface_soft, lightcolor=warning_color, darkcolor=warning_color, thickness=10)
+
+        self.style.configure('StatusGood.TFrame', background='#0f2a21')
+        self.style.configure('StatusAlert.TFrame', background='#32131a')
+        self.style.configure('StatusGoodHeading.TLabel', background='#0f2a21', foreground=success_color, font=('Segoe UI Black', 22))
+        self.style.configure('StatusAlertHeading.TLabel', background='#32131a', foreground=danger_color, font=('Segoe UI Black', 18))
+        self.style.configure('StatusSub.TLabel', background='#0f2a21', foreground=subtle_text, font=('Segoe UI', 10))
+        self.style.configure('StatusAlertSub.TLabel', background='#32131a', foreground=subtle_text, font=('Segoe UI', 10))
+
+        self.style.configure('Rule.TFrame', background=surface_bg)
+        self.style.configure('RuleAccent.TFrame', background=surface_alt)
+        self.style.configure('RuleTitle.TLabel', background=surface_bg, foreground=text_color, font=('Segoe UI Semibold', 11))
+        self.style.configure('RuleSubtitle.TLabel', background=surface_bg, foreground=subtle_text, font=('Segoe UI', 10))
+        self.style.configure('RulePillAccent.TLabel', background='#1c2f55', foreground=info_color, font=('Segoe UI Semibold', 9), padding=(10, 3))
+        self.style.configure('RulePillNeutral.TLabel', background='#1b2336', foreground=text_color, font=('Segoe UI Semibold', 9), padding=(10, 3))
+        self.style.configure('RulePillWarning.TLabel', background='#332116', foreground=warning_color, font=('Segoe UI Semibold', 9), padding=(10, 3))
 
     def create_widgets(self):
         """GUI-Widgets erstellen"""
-
-        # Main Container
         self.main_frame = ttk.Frame(self.root, padding=(24, 24, 24, 18), style='Main.TFrame')
         self.main_frame.pack(fill='both', expand=True)
 
-        # Header
-        header_frame = ttk.Frame(self.main_frame, style='Hero.TFrame', padding=(28, 26))
-        header_frame.pack(fill='x', pady=(0, 20))
+        header_frame = ttk.Frame(self.main_frame, style='Hero.TFrame', padding=(34, 28))
+        header_frame.pack(fill='x', pady=(0, 24))
+
+        hero_header = ttk.Frame(header_frame, style='Hero.TFrame')
+        hero_header.pack(fill='x')
+        ttk.Label(hero_header, text="🛡 Risk Control Center", style='HeroTitle.TLabel').pack(side='left')
+
+        hero_actions = ttk.Frame(hero_header, style='Hero.TFrame')
+        hero_actions.pack(side='right')
+        self.hero_status_var = tk.StringVar(value="SAFE")
+        ttk.Label(hero_actions, textvariable=self.hero_status_var, style='BadgeSuccess.TLabel').pack(side='left', padx=(0, 16))
+        ttk.Button(
+            hero_actions,
+            text="⚙ Bot Einstellungen",
+            style='Link.TButton',
+            command=self._open_bot_settings_from_header
+        ).pack(side='left', padx=(0, 16))
+        ttk.Button(
+            hero_actions,
+            text="🔔",
+            style='Link.TButton',
+            command=lambda: self.log_message("Benachrichtigungen folgen in einer späteren Version.")
+        ).pack(side='left')
 
         ttk.Label(
             header_frame,
-            text="📊 Multi-Chat Trading Cockpit",
-            style='HeroTitle.TLabel'
-        ).pack(anchor='w')
-
-        ttk.Label(
-            header_frame,
-            text="Synchronisiere Signale & verwalte Quellen in Echtzeit",
+            text="Überwache deine Signalquellen, Automation-Rules & Risikoparameter in Echtzeit",
             style='HeroSubtitle.TLabel'
-        ).pack(anchor='w', pady=(6, 0))
+        ).pack(anchor='w', pady=(12, 0))
 
         tag_frame = ttk.Frame(header_frame, style='Hero.TFrame')
-        tag_frame.pack(anchor='w', pady=(18, 0))
-        for tag_text in ("Live-Überwachung", "Mehrere Quellen", "Echtzeit-Sync"):
+        tag_frame.pack(anchor='w', pady=(22, 0))
+        for tag_text in ("Live Automation", "Compliance Guard", "Realtime Sync"):
             ttk.Label(tag_frame, text=tag_text, style='HeroTag.TLabel').pack(side='left', padx=(0, 12))
 
         ttk.Separator(self.main_frame).pack(fill='x', pady=(0, 16))
 
-        # Notebook-Tabs
         self.notebook = ttk.Notebook(self.main_frame)
         self.notebook.pack(fill='both', expand=True)
 
@@ -2006,64 +2129,164 @@ class TradingGUI:
         self.create_mt5_settings_tab()
         self.create_statistics_tab()
 
-        # Status Bar
-        self.status_frame = ttk.Frame(self.main_frame, style='Statusbar.TFrame', padding=(18, 12))
-        self.status_frame.pack(fill='x', pady=(12, 0))
+        self.status_frame = ttk.Frame(self.main_frame, style='Statusbar.TFrame', padding=(18, 14))
+        self.status_frame.pack(fill='x', pady=(18, 0))
 
         self.status_label = ttk.Label(self.status_frame, text="Bot gestoppt", style='Statusbar.TLabel')
         self.status_label.pack(side='left')
 
         button_frame = ttk.Frame(self.status_frame, style='Statusbar.TFrame')
         button_frame.pack(side='right')
-
         self.start_button = ttk.Button(
             button_frame,
             text="▶ Bot starten",
             command=self.start_bot,
             style='Accent.TButton'
         )
-        self.start_button.pack(side='left', padx=(0, 8))
+        self.start_button.pack(side='left', padx=(0, 12))
         ttk.Button(button_frame, text="■ Bot stoppen", command=self.stop_bot).pack(side='left')
+
+        self._update_status_badges()
+
+    def _open_bot_settings_from_header(self):
+        """Wechselt vom Header direkt zum Bot-Einstellungs-Tab."""
+        if hasattr(self, 'notebook'):
+            try:
+                self.notebook.select(1)
+            except Exception:
+                pass
 
     def create_chat_overview_tab(self):
         """Tab für die Chat-Übersicht"""
         chat_frame = ttk.Frame(self.notebook, padding=(24, 24, 24, 20), style='Main.TFrame')
-        self.notebook.add(chat_frame, text="Chats")
+        self.notebook.add(chat_frame, text="Risk Monitor")
 
         header = ttk.Frame(chat_frame, style='Main.TFrame')
         header.pack(fill='x')
-        ttk.Label(header, text="Meine Chats", style='SectionTitle.TLabel').pack(side='left')
-        self.chat_summary_label = ttk.Label(header, text="Keine Chats geladen", style='Info.TLabel')
+        ttk.Label(header, text="Signal & Risiko Übersicht", style='SectionTitle.TLabel').pack(side='left')
+        self.chat_summary_var = tk.StringVar(master=self.root, value="Noch keine Chats geladen")
+        self.chat_summary_label = ttk.Label(header, textvariable=self.chat_summary_var, style='Info.TLabel')
         self.chat_summary_label.pack(side='right')
 
-        badge_row = ttk.Frame(chat_frame, style='Main.TFrame')
-        badge_row.pack(fill='x', pady=(8, 4))
-        ttk.Label(badge_row, text="Automatische Synchronisierung aktiv", style='InfoBadge.TLabel').pack(side='left')
+        status_row = ttk.Frame(chat_frame, style='Main.TFrame')
+        status_row.pack(fill='x', pady=(18, 18))
+        status_row.columnconfigure((0, 1), weight=1, uniform='status')
 
-        controls_frame = ttk.Frame(chat_frame, style='Toolbar.TFrame', padding=(16, 12))
-        controls_frame.pack(fill='x', pady=(18, 14))
+        self.dashboard_state_var = tk.StringVar(master=self.root, value="SAFE")
+        self.open_signal_active_var = tk.StringVar(master=self.root, value="Keine offenen Signale")
+        safe_card = ttk.Frame(status_row, style='StatusGood.TFrame', padding=(24, 20))
+        safe_card.grid(row=0, column=0, sticky='nsew', padx=(0, 18))
+        ttk.Label(safe_card, textvariable=self.dashboard_state_var, style='StatusGoodHeading.TLabel').pack(anchor='w')
+        ttk.Label(safe_card, textvariable=self.open_signal_active_var, style='StatusSub.TLabel').pack(anchor='w', pady=(12, 0))
+
+        self.dashboard_alert_var = tk.StringVar(master=self.root, value="Keine aktiven Warnungen")
+        alert_card = ttk.Frame(status_row, style='StatusAlert.TFrame', padding=(24, 20))
+        alert_card.grid(row=0, column=1, sticky='nsew')
+        ttk.Label(alert_card, text="EMERGENCY FLAT", style='StatusAlertHeading.TLabel').pack(anchor='w')
+        ttk.Label(alert_card, textvariable=self.dashboard_alert_var, style='StatusAlertSub.TLabel').pack(anchor='w', pady=(12, 0))
+
+        metrics_row = ttk.Frame(chat_frame, style='Main.TFrame')
+        metrics_row.pack(fill='x')
+        metrics_row.columnconfigure((0, 1, 2, 3), weight=1, uniform='metrics')
+
+        self.chat_total_var = tk.StringVar(master=self.root, value="0")
+        total_card = self._build_dashboard_card(
+            metrics_row,
+            title="Signalquellen",
+            value=self.chat_total_var,
+            icon="🛰"
+        )
+        total_card.grid(row=0, column=0, sticky='nsew', padx=(0, 18))
+
+        self.chat_active_var = tk.StringVar(master=self.root, value="0")
+        active_card = self._build_dashboard_card(
+            metrics_row,
+            title="Aktiv überwacht",
+            value=self.chat_active_var,
+            icon="⚡"
+        )
+        active_card.grid(row=0, column=1, sticky='nsew', padx=(0, 18))
+
+        self.chat_signal_sum_var = tk.StringVar(master=self.root, value="0")
+        signals_card = self._build_dashboard_card(
+            metrics_row,
+            title="Gesamt-Signale",
+            value=self.chat_signal_sum_var,
+            icon="📈",
+            subtitle="Seit Start"
+        )
+        signals_card.grid(row=0, column=2, sticky='nsew', padx=(0, 18))
+
+        exposure_card = ttk.Frame(metrics_row, style='GlassCard.TFrame', padding=(24, 20))
+        exposure_card.grid(row=0, column=3, sticky='nsew')
+        ttk.Label(exposure_card, text="Exposure nach Symbol", style='GlassCardTitle.TLabel').pack(anchor='w')
+        ttk.Label(
+            exposure_card,
+            text="Anteil offener Positionen je Instrument",
+            style='GlassCardSubtitle.TLabel'
+        ).pack(anchor='w', pady=(4, 12))
+        self.exposure_list_frame = ttk.Frame(exposure_card, style='GlassCard.TFrame')
+        self.exposure_list_frame.pack(fill='x')
+
+        signals_overview = ttk.Frame(chat_frame, style='Card.TFrame', padding=(26, 24))
+        signals_overview.pack(fill='x', pady=(24, 20))
+        overview_header = ttk.Frame(signals_overview, style='Card.TFrame')
+        overview_header.pack(fill='x')
+        ttk.Label(overview_header, text="Open Signals", style='CardTitle.TLabel').pack(side='left')
+        self.open_signal_percentage_var = tk.StringVar(master=self.root, value="0.0% Auslastung")
+        ttk.Label(overview_header, textvariable=self.open_signal_percentage_var, style='BadgeInfo.TLabel').pack(side='right')
+
+        progress_frame = ttk.Frame(signals_overview, style='Card.TFrame')
+        progress_frame.pack(fill='x', pady=(16, 18))
+        self.open_signal_progress_var = tk.DoubleVar(value=0.0)
+        ttk.Progressbar(
+            progress_frame,
+            variable=self.open_signal_progress_var,
+            maximum=100,
+            style='Success.Horizontal.TProgressbar'
+        ).pack(fill='x')
+
+        limits_frame = ttk.Frame(signals_overview, style='Card.TFrame')
+        limits_frame.pack(fill='x')
+        limits_frame.columnconfigure((0, 1), weight=1)
+        ttk.Label(limits_frame, text="Session Limits", style='CardSubtitle.TLabel').grid(row=0, column=0, sticky='w')
+        self.dashboard_drawdown_var = tk.StringVar(master=self.root, value="-0.0%")
+        self.dashboard_daily_loss_var = tk.StringVar(master=self.root, value="€0")
+        ttk.Label(limits_frame, text="Max Drawdown", style='FieldLabel.TLabel').grid(row=1, column=0, sticky='w', pady=(12, 2))
+        ttk.Label(limits_frame, textvariable=self.dashboard_drawdown_var, style='MetricValue.TLabel').grid(row=1, column=1, sticky='e', pady=(12, 2))
+        ttk.Label(limits_frame, text="Tagesverlust", style='FieldLabel.TLabel').grid(row=2, column=0, sticky='w', pady=(4, 0))
+        ttk.Label(limits_frame, textvariable=self.dashboard_daily_loss_var, style='MetricValue.TLabel').grid(row=2, column=1, sticky='e', pady=(4, 0))
+
+        self.chat_last_sync_var = tk.StringVar(master=self.root, value="Letzte Synchronisierung: –")
+        ttk.Label(signals_overview, textvariable=self.chat_last_sync_var, style='CardSubtitle.TLabel').pack(anchor='w', pady=(18, 0))
+
+        self.dashboard_compliance_var = tk.StringVar(master=self.root, value="0 Compliance Alerts")
+        ttk.Label(signals_overview, textvariable=self.dashboard_compliance_var, style='CardSubtitle.TLabel').pack(anchor='w', pady=(6, 0))
+
+        controls_frame = ttk.Frame(chat_frame, style='Toolbar.TFrame', padding=(20, 14))
+        controls_frame.pack(fill='x', pady=(0, 20))
         controls_frame.columnconfigure((0, 1, 2, 3), weight=1)
 
         ttk.Button(
             controls_frame,
-            text="🔄 Chats laden",
+            text="🔄 Quellen synchronisieren",
             command=self.load_chats,
             style='Toolbar.TButton'
-        ).grid(row=0, column=0, sticky='w', padx=(0, 12))
+        ).grid(row=0, column=0, sticky='w', padx=(0, 16))
 
         ttk.Button(
             controls_frame,
-            text="✅ Überwachung aktivieren",
+            text="🟢 Monitoring aktivieren",
             command=self.enable_monitoring,
             style='Toolbar.TButton'
-        ).grid(row=0, column=1, sticky='w', padx=(0, 12))
+        ).grid(row=0, column=1, sticky='w', padx=(0, 16))
 
         ttk.Button(
             controls_frame,
-            text="⏸ Überwachung deaktivieren",
+            text="⛔ Monitoring pausieren",
             command=self.disable_monitoring,
             style='Toolbar.TButton'
-        ).grid(row=0, column=2, sticky='w', padx=(0, 12))
+        ).grid(row=0, column=2, sticky='w', padx=(0, 16))
 
         ttk.Button(
             controls_frame,
@@ -2072,23 +2295,23 @@ class TradingGUI:
             style='Toolbar.TButton'
         ).grid(row=0, column=3, sticky='w')
 
-        list_frame = ttk.LabelFrame(chat_frame, text="Verfügbare Chats", padding="16", style='Card.TLabelframe')
-        list_frame.pack(fill='both', expand=True)
+        table_card = ttk.Frame(chat_frame, style='Card.TFrame', padding=(0, 0, 0, 18))
+        table_card.pack(fill='both', expand=True)
+
+        table_header = ttk.Frame(table_card, style='Card.TFrame', padding=(26, 20, 26, 10))
+        table_header.pack(fill='x')
+        ttk.Label(table_header, text="Signal-Quellen Übersicht", style='CardTitle.TLabel').pack(side='left')
+        ttk.Button(
+            table_header,
+            text="ℹ Hilfe",
+            style='Link.TButton',
+            command=lambda: messagebox.showinfo(
+                "Information",
+                "Markieren Sie Chats und nutzen Sie die Toolbar, um die Überwachung anzupassen."
+            )
+        ).pack(side='right')
 
         columns = ('Name', 'ID', 'Typ', 'Teilnehmer', 'Überwacht', 'Signale')
-        self.chats_tree = ttk.Treeview(
-            list_frame,
-            columns=columns,
-            show='headings',
-            height=18,
-            style='Dashboard.Treeview'
-        )
-        self.chats_tree.pack(side='left', fill='both', expand=True)
-
-        chat_scroll = ttk.Scrollbar(list_frame, orient='vertical', command=self.chats_tree.yview)
-        chat_scroll.pack(side='right', fill='y')
-        self.chats_tree.configure(yscrollcommand=chat_scroll.set)
-
         heading_texts = {
             'Name': 'Chat-Name',
             'ID': 'Chat-ID',
@@ -2099,115 +2322,107 @@ class TradingGUI:
         }
         column_widths = {
             'Name': 260,
-            'ID': 140,
+            'ID': 150,
             'Typ': 110,
-            'Teilnehmer': 130,
+            'Teilnehmer': 140,
             'Überwacht': 140,
             'Signale': 140
         }
 
+        table_container = ttk.Frame(table_card, style='Card.TFrame', padding=(26, 0, 26, 0))
+        table_container.pack(fill='both', expand=True)
+        self.chats_tree = ttk.Treeview(
+            table_container,
+            columns=columns,
+            show='headings',
+            height=14,
+            style='Dashboard.Treeview'
+        )
+        self.chats_tree.pack(side='left', fill='both', expand=True)
         for col in columns:
             self.chats_tree.heading(col, text=heading_texts.get(col, col))
             self.chats_tree.column(col, width=column_widths.get(col, 120), anchor='w')
 
-        info_frame = ttk.Frame(chat_frame, style='InfoBar.TFrame', padding=(14, 12))
-        info_frame.pack(fill='x', pady=(14, 0))
-        ttk.Label(info_frame, text="Hinweis: Aktivierte Chats werden kontinuierlich synchronisiert.", style='InfoBar.TLabel').pack(side='left')
-        ttk.Button(
-            info_frame,
-            text="ℹ Hilfe",
-            style='Link.TButton',
-            command=lambda: messagebox.showinfo(
-                "Information",
-                "Markieren Sie Chats und nutzen Sie die Toolbar, um die Überwachung anzupassen."
-            )
-        ).pack(side='right')
+        chat_scroll = ttk.Scrollbar(table_container, orient='vertical', command=self.chats_tree.yview)
+        chat_scroll.pack(side='right', fill='y')
+        self.chats_tree.configure(yscrollcommand=chat_scroll.set)
+
+        self._refresh_symbol_exposure()
 
     def create_bot_settings_tab(self):
         """Tab für Bot-Einstellungen und Status"""
         settings_tab = ttk.Frame(self.notebook, padding=(24, 24, 24, 20), style='Main.TFrame')
-        self.notebook.add(settings_tab, text="Bot Einstellungen")
+        self.notebook.add(settings_tab, text="Automationen")
 
         header = ttk.Frame(settings_tab, style='Main.TFrame')
         header.pack(fill='x')
-        ttk.Label(header, text="Bot-Status & Einstellungen", style='SectionTitle.TLabel').pack(side='left')
-        self.trade_status_label = ttk.Label(header, text="Demo-Modus aktiv", style='Info.TLabel')
+        ttk.Label(header, text="Automation & Bot-Steuerung", style='SectionTitle.TLabel').pack(side='left')
+        self.trade_status_label = ttk.Label(header, text="Demo-Modus aktiv", style='BadgeSuccess.TLabel')
         self.trade_status_label.pack(side='right')
 
-        settings_frame = ttk.Frame(settings_tab, style='Card.TFrame', padding=(20, 18))
-        settings_frame.pack(fill='x', pady=(20, 16))
-        settings_frame.columnconfigure((0, 1, 2), weight=1)
+        overview_row = ttk.Frame(settings_tab, style='Main.TFrame')
+        overview_row.pack(fill='x', pady=(24, 22))
+        overview_row.columnconfigure((0, 1, 2), weight=1, uniform='overview')
 
-        self.demo_var = tk.BooleanVar(value=True)
+        mode_card = ttk.Frame(overview_row, style='Card.TFrame', padding=(26, 22))
+        mode_card.grid(row=0, column=0, sticky='nsew', padx=(0, 18))
+        ttk.Label(mode_card, text="Betriebsmodus", style='CardTitle.TLabel').pack(anchor='w')
+        ttk.Label(mode_card, text="Steuert, ob Trades live ausgeführt werden.", style='CardSubtitle.TLabel').pack(anchor='w', pady=(4, 14))
         ttk.Checkbutton(
-            settings_frame,
-            text="Demo-Modus (Empfohlen)",
+            mode_card,
+            text="Demo-Modus (empfohlen)",
             variable=self.demo_var,
             command=self.toggle_demo_mode,
             style='Switch.TCheckbutton'
-        ).grid(row=0, column=0, sticky='w')
+        ).pack(anchor='w')
 
-        ttk.Label(settings_frame, text="Ausführungsmodus:", style='FieldLabel.TLabel').grid(row=0, column=1, sticky='w')
+        execution_card = ttk.Frame(overview_row, style='Card.TFrame', padding=(26, 22))
+        execution_card.grid(row=0, column=1, sticky='nsew', padx=(0, 18))
+        ttk.Label(execution_card, text="Ausführungsmodus", style='CardTitle.TLabel').pack(anchor='w')
+        ttk.Label(execution_card, text="Legt fest, wie Signale umgesetzt werden.", style='CardSubtitle.TLabel').pack(anchor='w', pady=(4, 14))
         default_execution_label = self.execution_mode_labels.get(ExecutionMode.INSTANT, "Sofortausführung")
         self.execution_mode_var = tk.StringVar(value=default_execution_label)
         self.execution_mode_combobox = ttk.Combobox(
-            settings_frame,
+            execution_card,
             textvariable=self.execution_mode_var,
             values=list(self.execution_mode_labels.values()),
             state='readonly'
         )
-        self.execution_mode_combobox.grid(row=0, column=2, sticky='ew', padx=(8, 0))
+        self.execution_mode_combobox.pack(fill='x')
         self.execution_mode_combobox.bind('<<ComboboxSelected>>', self.on_execution_mode_change)
 
-        warning_label = ttk.Label(
-            settings_frame,
-            text="⚠ WARNUNG: Automatisiertes Trading birgt hohe Verlustrisiken!",
-            style='Warning.TLabel'
-        )
-        warning_label.grid(row=1, column=0, columnspan=3, sticky='w', pady=(14, 0))
+        telemetry_card = ttk.Frame(overview_row, style='Card.TFrame', padding=(26, 22))
+        telemetry_card.grid(row=0, column=2, sticky='nsew')
+        ttk.Label(telemetry_card, text="Realtime Telemetrie", style='CardTitle.TLabel').pack(anchor='w')
+        ttk.Label(telemetry_card, text="Einblicke in Latenz & Alarmqualität.", style='CardSubtitle.TLabel').pack(anchor='w', pady=(4, 14))
+        self.latency_var = tk.StringVar(master=self.root, value="210 ms")
+        self.alert_score_var = tk.StringVar(master=self.root, value="0.63")
+        ttk.Label(telemetry_card, text="Latenz zum Broker", style='FieldLabel.TLabel').pack(anchor='w')
+        ttk.Label(telemetry_card, textvariable=self.latency_var, style='MetricValue.TLabel').pack(anchor='w', pady=(4, 12))
+        ttk.Label(telemetry_card, text="Alert Quality Score", style='FieldLabel.TLabel').pack(anchor='w')
+        ttk.Label(telemetry_card, textvariable=self.alert_score_var, style='MetricValue.TLabel').pack(anchor='w', pady=(4, 0))
 
-        signal_settings_frame = ttk.Frame(settings_tab, style='Card.TFrame', padding=(20, 18))
-        signal_settings_frame.pack(fill='x', pady=(0, 18))
-        signal_settings_frame.columnconfigure((0, 1), weight=1)
+        automation_card = ttk.Frame(settings_tab, style='GlassCard.TFrame', padding=(28, 24))
+        automation_card.pack(fill='x', pady=(0, 22))
+        automation_header = ttk.Frame(automation_card, style='GlassCard.TFrame')
+        automation_header.pack(fill='x')
+        ttk.Label(automation_header, text="AUTOMATIONS", style='GlassCardTitle.TLabel').pack(side='left')
+        ttk.Label(automation_header, text="LIVE", style='BadgeSuccess.TLabel').pack(side='left', padx=(12, 0))
+        ttk.Button(
+            automation_header,
+            text="+ Neue Regel",
+            style='Link.TButton',
+            command=lambda: self.log_message("Benutzerdefinierte Automationsregeln folgen in einer späteren Version.")
+        ).pack(side='right')
 
-        ttk.Label(
-            signal_settings_frame,
-            text="Signal-Optionen:",
-            style='FieldLabel.TLabel'
-        ).grid(row=0, column=0, columnspan=2, sticky='w')
+        self.automation_rules_container = ttk.Frame(automation_card, style='GlassCard.TFrame')
+        self.automation_rules_container.pack(fill='x', pady=(20, 0))
 
-        ttk.Checkbutton(
-            signal_settings_frame,
-            text="Sofort-Trading aktiv",
-            variable=self.instant_trading_var,
-            command=lambda key='instant_trading_enabled': self._handle_signal_flag_change(key)
-        ).grid(row=1, column=0, sticky='w', pady=(10, 4))
-
-        ttk.Checkbutton(
-            signal_settings_frame,
-            text="Zonen-Trading aktiv",
-            variable=self.zone_trading_var,
-            command=lambda key='zone_trading_enabled': self._handle_signal_flag_change(key)
-        ).grid(row=1, column=1, sticky='w', pady=(10, 4), padx=(12, 0))
-
-        ttk.Checkbutton(
-            signal_settings_frame,
-            text="Bestätigung vor Ausführung",
-            variable=self.require_confirmation_var,
-            command=lambda key='require_confirmation': self._handle_signal_flag_change(key)
-        ).grid(row=2, column=0, sticky='w', pady=(4, 0))
-
-        ttk.Checkbutton(
-            signal_settings_frame,
-            text="SL/TP automatisch erkennen",
-            variable=self.auto_tp_sl_var,
-            command=lambda key='auto_tp_sl': self._handle_signal_flag_change(key)
-        ).grid(row=2, column=1, sticky='w', pady=(4, 0), padx=(12, 0))
-
-        numeric_frame = ttk.Frame(settings_tab, style='Card.TFrame', padding=(20, 18))
-        numeric_frame.pack(fill='x', pady=(0, 18))
-        for col_index in (1, 3):
-            numeric_frame.columnconfigure(col_index, weight=1)
+        risk_card = ttk.Frame(settings_tab, style='Card.TFrame', padding=(28, 24))
+        risk_card.pack(fill='x', pady=(0, 22))
+        risk_card.columnconfigure((1, 3), weight=1)
+        ttk.Label(risk_card, text="Risikoparameter", style='CardTitle.TLabel').grid(row=0, column=0, columnspan=4, sticky='w')
+        ttk.Label(risk_card, text="Definiert Positionsgrößen & Sicherheitsgrenzen.", style='CardSubtitle.TLabel').grid(row=1, column=0, columnspan=4, sticky='w', pady=(4, 18))
 
         trading_spinboxes = [
             (
@@ -2229,13 +2444,9 @@ class TradingGUI:
         ]
 
         for idx, (label_text, variable, minimum, maximum, step, number_format, validator, min_text, key) in enumerate(trading_spinboxes):
-            row = idx // 2
+            row = 2 + idx // 2
             column = (idx % 2) * 2
-            ttk.Label(
-                numeric_frame,
-                text=label_text,
-                style='FieldLabel.TLabel'
-            ).grid(row=row, column=column, sticky='w')
+            ttk.Label(risk_card, text=label_text, style='FieldLabel.TLabel').grid(row=row, column=column, sticky='w', pady=(0, 6))
 
             spinbox_kwargs = {
                 'textvariable': variable,
@@ -2248,37 +2459,42 @@ class TradingGUI:
             }
             if number_format:
                 spinbox_kwargs['format'] = number_format
-            spinbox = ttk.Spinbox(numeric_frame, **spinbox_kwargs)
-            spinbox.grid(row=row, column=column + 1, sticky='w', padx=(10, 0), pady=(0, 6))
-            numeric_frame.grid_rowconfigure(row, pad=6)
+            spinbox = ttk.Spinbox(risk_card, **spinbox_kwargs)
+            spinbox.grid(row=row, column=column + 1, sticky='w', padx=(12, 0))
 
-        toolbar = ttk.Frame(settings_tab, style='Toolbar.TFrame', padding=(16, 12))
-        toolbar.pack(fill='x', pady=(0, 18))
+        toolbar = ttk.Frame(settings_tab, style='Toolbar.TFrame', padding=(20, 14))
+        toolbar.pack(fill='x', pady=(0, 22))
         ttk.Button(toolbar, text="📥 Signale abrufen", style='Toolbar.TButton', command=self.load_chats).pack(side='left')
-        ttk.Button(toolbar, text="🧹 Log leeren", style='Toolbar.TButton', command=self.clear_log).pack(side='left', padx=(10, 0))
-        ttk.Button(toolbar, text="📊 Statistiken aktualisieren", style='Toolbar.TButton', command=self.refresh_statistics).pack(side='left', padx=(10, 0))
+        ttk.Button(toolbar, text="🧹 Log leeren", style='Toolbar.TButton', command=self.clear_log).pack(side='left', padx=(12, 0))
+        ttk.Button(toolbar, text="📊 Statistiken aktualisieren", style='Toolbar.TButton', command=self.refresh_statistics).pack(side='left', padx=(12, 0))
 
         metrics_frame = ttk.Frame(settings_tab, style='Main.TFrame')
-        metrics_frame.pack(fill='x', pady=(0, 18))
+        metrics_frame.pack(fill='x', pady=(0, 22))
         metrics_frame.columnconfigure((0, 1, 2), weight=1)
-        for idx, (title, value) in enumerate([
+        metric_titles = [
             ("Aktive Chats", "0"),
             ("Überwachte Signale", "0"),
             ("Heute synchronisiert", "0")
-        ]):
-            metric = ttk.Frame(metrics_frame, style='Metric.TFrame', padding=(16, 12))
-            metric.grid(row=0, column=idx, padx=(0 if idx == 0 else 12, 0), sticky='nsew')
-            ttk.Label(metric, text=title, style='MetricTitle.TLabel').pack(anchor='w')
-            ttk.Label(metric, text=value, style='MetricValue.TLabel').pack(anchor='w', pady=(4, 0))
+        ]
+        for idx, (title, value) in enumerate(metric_titles):
+            metric_card = ttk.Frame(metrics_frame, style='GlassCard.TFrame', padding=(22, 18))
+            metric_card.grid(row=0, column=idx, sticky='nsew', padx=(0 if idx == 0 else 18, 0))
+            ttk.Label(metric_card, text=title, style='GlassCardSubtitle.TLabel').pack(anchor='w')
+            ttk.Label(metric_card, text=value, style='MetricValue.TLabel').pack(anchor='w', pady=(6, 0))
 
-        log_frame = ttk.LabelFrame(settings_tab, text="Live-Aktivitätsprotokoll", padding="16", style='Card.TLabelframe')
+        log_frame = ttk.Frame(settings_tab, style='Card.TFrame', padding=(0, 0, 0, 0))
         log_frame.pack(fill='both', expand=True)
+        log_header = ttk.Frame(log_frame, style='Card.TFrame', padding=(24, 18, 24, 8))
+        log_header.pack(fill='x')
+        ttk.Label(log_header, text="Live-Aktivitätsprotokoll", style='CardTitle.TLabel').pack(side='left')
 
+        log_container = ttk.Frame(log_frame, style='Card.TFrame', padding=(24, 0, 24, 24))
+        log_container.pack(fill='both', expand=True)
         self.log_text = tk.Text(
-            log_frame,
+            log_container,
             height=16,
             wrap='word',
-            bg=self.theme_colors['surface_bg'],
+            bg=self.theme_colors['surface_alt'],
             fg=self.theme_colors['text'],
             insertbackground=self.theme_colors['accent'],
             font=('Consolas', 11),
@@ -2290,9 +2506,11 @@ class TradingGUI:
         )
         self.log_text.pack(side='left', fill='both', expand=True)
 
-        log_scroll = ttk.Scrollbar(log_frame, orient='vertical', command=self.log_text.yview)
+        log_scroll = ttk.Scrollbar(log_container, orient='vertical', command=self.log_text.yview)
         log_scroll.pack(side='right', fill='y')
-        self.log_text.configure(yscrollcommand=log_scroll.set, padx=14, pady=12, spacing3=6)
+        self.log_text.configure(yscrollcommand=log_scroll.set, padx=16, pady=14, spacing3=6)
+
+        self._refresh_automation_rules_display()
 
     def create_mt5_settings_tab(self):
         """Tab für MetaTrader-5-Zugangsdaten und Verbindung"""
@@ -2302,123 +2520,87 @@ class TradingGUI:
         header = ttk.Frame(mt5_tab, style='Main.TFrame')
         header.pack(fill='x')
         ttk.Label(header, text="MetaTrader 5 Integration", style='SectionTitle.TLabel').pack(side='left')
-        status_text = (
-            "MT5-Unterstützung verfügbar"
-            if MT5_AVAILABLE
-            else "MT5-Modul nicht gefunden – Eingabe möglich"
-        )
-        ttk.Label(header, text=status_text, style='Info.TLabel').pack(side='right')
+        status_text = "MT5-Unterstützung aktiv" if MT5_AVAILABLE else "MT5-Modul nicht gefunden"
+        badge_style = 'BadgeSuccess.TLabel' if MT5_AVAILABLE else 'BadgeWarning.TLabel'
+        ttk.Label(header, text=status_text, style=badge_style).pack(side='right')
 
-        mt5_frame = ttk.Frame(mt5_tab, style='Card.TFrame', padding=(20, 18))
-        mt5_frame.pack(fill='x', pady=(20, 18))
+        summary_row = ttk.Frame(mt5_tab, style='Main.TFrame')
+        summary_row.pack(fill='x', pady=(24, 20))
+        summary_row.columnconfigure((0, 1, 2), weight=1, uniform='mt5summary')
+
+        login_card = ttk.Frame(summary_row, style='Card.TFrame', padding=(24, 20))
+        login_card.grid(row=0, column=0, sticky='nsew', padx=(0, 18))
+        ttk.Label(login_card, text="Login Status", style='CardTitle.TLabel').pack(anchor='w')
+        ttk.Label(login_card, text="Hinterlegte Kontonummer", style='CardSubtitle.TLabel').pack(anchor='w', pady=(4, 12))
+        ttk.Label(login_card, textvariable=self.mt5_login_var, style='MetricValue.TLabel').pack(anchor='w')
+
+        server_card = ttk.Frame(summary_row, style='Card.TFrame', padding=(24, 20))
+        server_card.grid(row=0, column=1, sticky='nsew', padx=(0, 18))
+        ttk.Label(server_card, text="Server", style='CardTitle.TLabel').pack(anchor='w')
+        ttk.Label(server_card, text="Konfigurierter MT5-Server", style='CardSubtitle.TLabel').pack(anchor='w', pady=(4, 12))
+        ttk.Label(server_card, textvariable=self.mt5_server_var, style='MetricValue.TLabel').pack(anchor='w')
+
+        mode_card = ttk.Frame(summary_row, style='Card.TFrame', padding=(24, 20))
+        mode_card.grid(row=0, column=2, sticky='nsew')
+        ttk.Label(mode_card, text="Verbindungsmodus", style='CardTitle.TLabel').pack(anchor='w')
+        ttk.Label(mode_card, text="LIVE-Verbindung benötigt MT5-Modul", style='CardSubtitle.TLabel').pack(anchor='w', pady=(4, 12))
+        ttk.Label(mode_card, text="Verbindung bereit" if MT5_AVAILABLE else "Nur Demo-Modus", style='MetricValue.TLabel').pack(anchor='w')
+
+        mt5_frame = ttk.Frame(mt5_tab, style='Card.TFrame', padding=(28, 24))
+        mt5_frame.pack(fill='x', pady=(0, 22))
         mt5_frame.columnconfigure(1, weight=1)
-        ttk.Label(
-            mt5_frame,
-            text="Verbindung konfigurieren",
-            style='FieldLabel.TLabel'
-        ).grid(row=0, column=0, columnspan=3, sticky='w')
+        ttk.Label(mt5_frame, text="Zugangsdaten", style='CardTitle.TLabel').grid(row=0, column=0, columnspan=3, sticky='w')
+        ttk.Label(mt5_frame, text="Erforderlich für LIVE-Trading.", style='CardSubtitle.TLabel').grid(row=1, column=0, columnspan=3, sticky='w', pady=(4, 18))
 
         entry_state = 'normal'
         browse_button_state = 'normal'
         save_button_state = 'normal'
         test_button_state = 'normal' if MT5_AVAILABLE else 'disabled'
 
-        ttk.Label(mt5_frame, text="Login (Kontonummer):", style='FieldLabel.TLabel').grid(
-            row=1, column=0, sticky='w', pady=(12, 4)
-        )
-        ttk.Entry(
-            mt5_frame,
-            textvariable=self.mt5_login_var,
-            state=entry_state
-        ).grid(row=1, column=1, sticky='ew', padx=(10, 0), pady=(12, 4))
+        ttk.Label(mt5_frame, text="Login (Kontonummer)", style='FieldLabel.TLabel').grid(row=2, column=0, sticky='w', pady=(0, 4))
+        ttk.Entry(mt5_frame, textvariable=self.mt5_login_var, state=entry_state).grid(row=2, column=1, sticky='ew', padx=(12, 0))
 
-        ttk.Label(mt5_frame, text="Passwort:", style='FieldLabel.TLabel').grid(
-            row=2, column=0, sticky='w', pady=(0, 4)
-        )
-        ttk.Entry(
-            mt5_frame,
-            textvariable=self.mt5_password_var,
-            show='•',
-            state=entry_state
-        ).grid(row=2, column=1, sticky='ew', padx=(10, 0), pady=(0, 4))
+        ttk.Label(mt5_frame, text="Passwort", style='FieldLabel.TLabel').grid(row=3, column=0, sticky='w', pady=(12, 4))
+        ttk.Entry(mt5_frame, textvariable=self.mt5_password_var, show='•', state=entry_state).grid(row=3, column=1, sticky='ew', padx=(12, 0))
 
-        ttk.Label(mt5_frame, text="Server:", style='FieldLabel.TLabel').grid(
-            row=3, column=0, sticky='w', pady=(0, 4)
-        )
-        ttk.Entry(
-            mt5_frame,
-            textvariable=self.mt5_server_var,
-            state=entry_state
-        ).grid(row=3, column=1, sticky='ew', padx=(10, 0), pady=(0, 4))
+        ttk.Label(mt5_frame, text="Server", style='FieldLabel.TLabel').grid(row=4, column=0, sticky='w', pady=(12, 4))
+        ttk.Entry(mt5_frame, textvariable=self.mt5_server_var, state=entry_state).grid(row=4, column=1, sticky='ew', padx=(12, 0))
 
-        ttk.Label(mt5_frame, text="MT5-Terminal (optional):", style='FieldLabel.TLabel').grid(
-            row=4, column=0, sticky='w', pady=(0, 4)
-        )
-        ttk.Entry(
-            mt5_frame,
-            textvariable=self.mt5_path_var,
-            state=entry_state
-        ).grid(row=4, column=1, sticky='ew', padx=(10, 0), pady=(0, 4))
-        ttk.Button(
-            mt5_frame,
-            text="Durchsuchen…",
-            command=self.browse_mt5_path,
-            state=browse_button_state
-        ).grid(row=4, column=2, sticky='w', padx=(8, 0), pady=(0, 4))
+        ttk.Label(mt5_frame, text="MT5-Terminal (optional)", style='FieldLabel.TLabel').grid(row=5, column=0, sticky='w', pady=(12, 4))
+        ttk.Entry(mt5_frame, textvariable=self.mt5_path_var, state=entry_state).grid(row=5, column=1, sticky='ew', padx=(12, 0))
+        ttk.Button(mt5_frame, text="Durchsuchen…", command=self.browse_mt5_path, state=browse_button_state).grid(row=5, column=2, sticky='w', padx=(10, 0))
 
-        mt5_button_row = ttk.Frame(mt5_frame, style='Card.TFrame')
-        mt5_button_row.grid(row=5, column=0, columnspan=3, sticky='w', pady=(14, 0))
-        ttk.Button(
-            mt5_button_row,
-            text="Zugangsdaten speichern",
-            command=self.save_mt5_credentials,
-            state=save_button_state
-        ).pack(side='left')
-        ttk.Button(
-            mt5_button_row,
-            text="Verbindung testen",
-            command=self.test_mt5_connection,
-            state=test_button_state
-        ).pack(side='left', padx=(12, 0))
+        button_row = ttk.Frame(mt5_frame, style='Card.TFrame')
+        button_row.grid(row=6, column=0, columnspan=3, sticky='w', pady=(18, 0))
+        ttk.Button(button_row, text="Zugangsdaten speichern", command=self.save_mt5_credentials, state=save_button_state).pack(side='left')
+        ttk.Button(button_row, text="Verbindung testen", command=self.test_mt5_connection, state=test_button_state).pack(side='left', padx=(12, 0))
 
-        self.mt5_status_card = ttk.Frame(mt5_frame, style='Card.TFrame', padding=(12, 10))
-        self.mt5_status_card.grid(row=6, column=0, columnspan=3, sticky='ew', pady=(12, 0))
+        self.mt5_status_card = ttk.Frame(mt5_frame, style='GlassCard.TFrame', padding=(18, 16))
+        self.mt5_status_card.grid(row=7, column=0, columnspan=3, sticky='ew', pady=(20, 0))
         self.mt5_status_message_var = tk.StringVar(value="Noch keine MT5-Zugangsdaten gespeichert.")
         self.mt5_status_label = ttk.Label(
             self.mt5_status_card,
             textvariable=self.mt5_status_message_var,
-            style='Info.TLabel',
+            style='GlassCardSubtitle.TLabel',
             wraplength=760,
             justify='left'
         )
         self.mt5_status_label.pack(anchor='w')
 
-        if MT5_AVAILABLE:
-            ttk.Label(
-                mt5_frame,
-                text="Hinweis: Sie können hier auch ein MetaTrader-5-Demokonto hinterlegen und den LIVE-Modus damit testen.",
-                style='Info.TLabel',
-                wraplength=760,
-                justify='left'
-            ).grid(row=7, column=0, columnspan=3, sticky='w', pady=(12, 0))
-        else:
-            ttk.Label(
-                mt5_frame,
-                text=(
-                    "MetaTrader5-Python-Modul wurde nicht gefunden. Installieren Sie MetaTrader 5 inklusive "
-                    "Python-Paket, um den LIVE-Modus nutzen zu können."
-                ),
-                style='Warning.TLabel',
-                wraplength=760,
-                justify='left'
-            ).grid(row=7, column=0, columnspan=3, sticky='w', pady=(12, 0))
+        info_text = (
+            "Hinweis: Hinterlegen Sie ein MT5-Demokonto, um den LIVE-Modus vorab zu testen."
+            if MT5_AVAILABLE
+            else "MetaTrader5-Python-Modul wurde nicht gefunden. Installieren Sie MetaTrader 5 inklusive Python-Paket."
+        )
+        info_style = 'Info.TLabel' if MT5_AVAILABLE else 'Warning.TLabel'
+        ttk.Label(mt5_tab, text=info_text, style=info_style, wraplength=820, justify='left').pack(fill='x', pady=(0, 12))
 
         self._refresh_mt5_status_display()
 
     def create_statistics_tab(self):
         """Tab für Statistiken des Kopierers"""
         stats_frame = ttk.Frame(self.notebook, padding=(24, 24, 24, 20), style='Main.TFrame')
-        self.notebook.add(stats_frame, text="Kopierer Statistiken")
+        self.notebook.add(stats_frame, text="Performance")
 
         header = ttk.Frame(stats_frame, style='Main.TFrame')
         header.pack(fill='x')
@@ -2426,21 +2608,192 @@ class TradingGUI:
         self.statistics_hint = ttk.Label(header, text="Letzte Aktualisierung: –", style='Info.TLabel')
         self.statistics_hint.pack(side='right')
 
-        kpi_frame = ttk.Frame(stats_frame, style='Main.TFrame')
-        kpi_frame.pack(fill='x', pady=(18, 18))
-        kpi_frame.columnconfigure((0, 1, 2), weight=1)
-        for idx, (title, value) in enumerate([
-            ("Gesamtgewinn", "0.00"),
-            ("Trefferquote", "0.0%"),
-            ("Signale gesamt", "0")
-        ]):
-            card = ttk.Frame(kpi_frame, style='Metric.TFrame', padding=(16, 12))
-            card.grid(row=0, column=idx, padx=(0 if idx == 0 else 12, 0), sticky='nsew')
-            ttk.Label(card, text=title, style='MetricTitle.TLabel').pack(anchor='w')
-            ttk.Label(card, text=value, style='MetricValue.TLabel').pack(anchor='w', pady=(4, 0))
+        performance_row = ttk.Frame(stats_frame, style='Main.TFrame')
+        performance_row.pack(fill='x', pady=(24, 22))
+        performance_row.columnconfigure(0, weight=3)
+        performance_row.columnconfigure(1, weight=2)
 
-        source_frame = ttk.LabelFrame(stats_frame, text="Statistiken nach Quelle", padding="16", style='Card.TLabelframe')
-        source_frame.pack(fill='both', expand=True)
+        performance_card = ttk.Frame(performance_row, style='Card.TFrame', padding=(28, 24))
+        performance_card.grid(row=0, column=0, sticky='nsew', padx=(0, 20))
+        perf_header = ttk.Frame(performance_card, style='Card.TFrame')
+        perf_header.pack(fill='x')
+        ttk.Label(perf_header, text="Trading Bot Performance", style='CardTitle.TLabel').pack(side='left')
+        header_right = ttk.Frame(perf_header, style='Card.TFrame')
+        header_right.pack(side='right')
+        ttk.Button(
+            header_right,
+            text="Zeitraum wählen",
+            style='Link.TButton',
+            command=lambda: self.log_message("Zeitraumfilter folgt.")
+        ).pack(side='right')
+        ttk.Button(header_right, text="CSV exportieren", style='Link.TButton', command=self.export_statistics).pack(side='right', padx=(16, 0))
+
+        self.equity_curve_canvas = tk.Canvas(
+            performance_card,
+            height=240,
+            bg=self.theme_colors['surface_alt'],
+            highlightthickness=0,
+            borderwidth=0
+        )
+        self.equity_curve_canvas.pack(fill='both', expand=True, pady=(24, 0))
+        self.equity_curve_canvas.bind('<Configure>', self._draw_equity_curve)
+
+        kpi_card = ttk.Frame(performance_row, style='GlassCard.TFrame', padding=(26, 22))
+        kpi_card.grid(row=0, column=1, sticky='nsew')
+        kpi_card.columnconfigure((0, 1), weight=1)
+
+        self.stats_sharpe_var = tk.StringVar(master=self.root, value="1.45")
+        self.stats_sortino_var = tk.StringVar(master=self.root, value="2.30")
+        self.stats_drawdown_var = tk.StringVar(master=self.root, value="-13.7%")
+        self.stats_win_rate_var = tk.StringVar(master=self.root, value="67.5%")
+        self.stats_profit_var = tk.StringVar(master=self.root, value="+4 453")
+
+        kpi_values = [
+            ("Sharpe", self.stats_sharpe_var, 'MetricValue.TLabel'),
+            ("Sortino", self.stats_sortino_var, 'MetricValue.TLabel'),
+            ("Max Drawdown", self.stats_drawdown_var, 'MetricNegative.TLabel'),
+            ("Win Rate", self.stats_win_rate_var, 'MetricValue.TLabel'),
+            ("Profit", self.stats_profit_var, 'MetricPositive.TLabel')
+        ]
+        for idx, (title, var, style) in enumerate(kpi_values):
+            row = idx // 2
+            column = idx % 2
+            card = ttk.Frame(kpi_card, style='GlassCard.TFrame', padding=(12, 10))
+            card.grid(row=row, column=column, sticky='nsew', padx=(0 if column == 0 else 16, 0), pady=(0 if row == 0 else 16, 0))
+            ttk.Label(card, text=title, style='GlassCardSubtitle.TLabel').pack(anchor='w')
+            ttk.Label(card, textvariable=var, style=style).pack(anchor='w', pady=(6, 0))
+
+        analytics_row = ttk.Frame(stats_frame, style='Main.TFrame')
+        analytics_row.pack(fill='x', pady=(0, 22))
+        analytics_row.columnconfigure((0, 1), weight=1, uniform='analytics')
+
+        monthly_card = ttk.Frame(analytics_row, style='Card.TFrame', padding=(26, 22))
+        monthly_card.grid(row=0, column=0, sticky='nsew', padx=(0, 20))
+        ttk.Label(monthly_card, text="Monthly Profit", style='CardTitle.TLabel').pack(anchor='w')
+        ttk.Label(monthly_card, text="Heatmap der Monatsperformance", style='CardSubtitle.TLabel').pack(anchor='w', pady=(4, 18))
+        self.monthly_heatmap_canvas = tk.Canvas(
+            monthly_card,
+            height=170,
+            bg=self.theme_colors['surface_alt'],
+            highlightthickness=0,
+            borderwidth=0
+        )
+        self.monthly_heatmap_canvas.pack(fill='both', expand=True)
+        self.monthly_heatmap_canvas.bind('<Configure>', self._draw_monthly_profit_heatmap)
+
+        distribution_card = ttk.Frame(analytics_row, style='Card.TFrame', padding=(26, 22))
+        distribution_card.grid(row=0, column=1, sticky='nsew')
+        ttk.Label(distribution_card, text="Profit Distribution", style='CardTitle.TLabel').pack(anchor='w')
+        ttk.Label(distribution_card, text="Histogramm der Trade-Ergebnisse", style='CardSubtitle.TLabel').pack(anchor='w', pady=(4, 18))
+        self.profit_distribution_canvas = tk.Canvas(
+            distribution_card,
+            height=170,
+            bg=self.theme_colors['surface_alt'],
+            highlightthickness=0,
+            borderwidth=0
+        )
+        self.profit_distribution_canvas.pack(fill='both', expand=True)
+        self.profit_distribution_canvas.bind('<Configure>', self._draw_profit_distribution)
+
+        detail_row = ttk.Frame(stats_frame, style='Main.TFrame')
+        detail_row.pack(fill='both', expand=True)
+        detail_row.columnconfigure(0, weight=2)
+        detail_row.columnconfigure(1, weight=3)
+
+        detail_card = ttk.Frame(detail_row, style='GlassCard.TFrame', padding=(28, 24))
+        detail_card.grid(row=0, column=0, sticky='nsew', padx=(0, 20))
+        detail_header = ttk.Frame(detail_card, style='GlassCard.TFrame')
+        detail_header.pack(fill='x')
+        self.chat_detail_title_var = tk.StringVar(master=self.root, value="Chat-Statistiken – Auswahl")
+        ttk.Label(detail_header, textvariable=self.chat_detail_title_var, style='GlassCardTitle.TLabel').pack(side='left')
+        ttk.Label(detail_header, text="LIVE", style='BadgeInfo.TLabel').pack(side='left', padx=(12, 0))
+        ttk.Button(detail_header, text="EXPORT CSV", style='Link.TButton', command=self.export_statistics).pack(side='right')
+
+        metrics_grid = ttk.Frame(detail_card, style='GlassCard.TFrame')
+        metrics_grid.pack(fill='x', pady=(18, 18))
+        metrics_grid.columnconfigure((0, 1), weight=1)
+
+        self.detail_winrate_var = tk.StringVar(master=self.root, value="69.4%")
+        self.detail_rr_var = tk.StringVar(master=self.root, value="2.18")
+        self.detail_signals_var = tk.StringVar(master=self.root, value="125")
+        self.detail_profit_var = tk.StringVar(master=self.root, value="+9 432")
+
+        detail_metrics = [
+            ("Winrate", self.detail_winrate_var),
+            ("Risk/Reward", self.detail_rr_var),
+            ("Signale", self.detail_signals_var),
+            ("Profit", self.detail_profit_var)
+        ]
+        for idx, (title, var) in enumerate(detail_metrics):
+            row = idx // 2
+            column = idx % 2
+            card = ttk.Frame(metrics_grid, style='GlassCard.TFrame', padding=(12, 10))
+            card.grid(row=row, column=column, sticky='nsew', padx=(0 if column == 0 else 16, 0), pady=(0 if row == 0 else 16, 0))
+            ttk.Label(card, text=title, style='GlassCardSubtitle.TLabel').pack(anchor='w')
+            ttk.Label(card, textvariable=var, style='MetricValue.TLabel').pack(anchor='w', pady=(6, 0))
+
+        ttk.Label(detail_card, text="Session Heatmap", style='GlassCardSubtitle.TLabel').pack(anchor='w')
+        self.session_heatmap_canvas = tk.Canvas(
+            detail_card,
+            height=170,
+            bg=self.theme_colors['surface_alt'],
+            highlightthickness=0,
+            borderwidth=0
+        )
+        self.session_heatmap_canvas.pack(fill='both', expand=True, pady=(12, 20))
+        self.session_heatmap_canvas.bind('<Configure>', self._draw_session_heatmap)
+
+        distribution_section = ttk.Frame(detail_card, style='GlassCard.TFrame')
+        distribution_section.pack(fill='x')
+        distribution_section.columnconfigure((0, 1), weight=1)
+
+        pair_frame = ttk.Frame(distribution_section, style='GlassCard.TFrame')
+        pair_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 12))
+        ttk.Label(pair_frame, text="Pair Distribution", style='GlassCardSubtitle.TLabel').pack(anchor='w')
+        self.pair_distribution_canvas = tk.Canvas(
+            pair_frame,
+            height=140,
+            bg=self.theme_colors['surface_alt'],
+            highlightthickness=0,
+            borderwidth=0
+        )
+        self.pair_distribution_canvas.pack(fill='both', expand=True, pady=(12, 0))
+        self.pair_distribution_canvas.bind('<Configure>', self._draw_pair_distribution)
+
+        accuracy_frame = ttk.Frame(distribution_section, style='GlassCard.TFrame')
+        accuracy_frame.grid(row=0, column=1, sticky='nsew', padx=(12, 0))
+        ttk.Label(accuracy_frame, text="Accuracy by Pair", style='GlassCardSubtitle.TLabel').pack(anchor='w')
+        self.accuracy_gauge_canvas = tk.Canvas(
+            accuracy_frame,
+            height=140,
+            bg=self.theme_colors['surface_alt'],
+            highlightthickness=0,
+            borderwidth=0
+        )
+        self.accuracy_gauge_canvas.pack(fill='both', expand=True, pady=(12, 0))
+        self.accuracy_gauge_canvas.bind('<Configure>', self._draw_accuracy_gauge)
+
+        stats_meta = ttk.Frame(detail_card, style='GlassCard.TFrame')
+        stats_meta.pack(fill='x', pady=(18, 0))
+        stats_meta.columnconfigure((0, 1, 2), weight=1)
+        self.chat_detail_latency_var = tk.StringVar(master=self.root, value="210 ms")
+        self.chat_detail_quality_var = tk.StringVar(master=self.root, value="0.63")
+        self.chat_detail_risk_var = tk.StringVar(master=self.root, value=f"{self.risk_percent_var.get():.1f}% Risiko")
+        meta_values = [
+            ("Latenz", self.chat_detail_latency_var),
+            ("Alert Quality", self.chat_detail_quality_var),
+            ("Risk Parameter", self.chat_detail_risk_var)
+        ]
+        for idx, (title, var) in enumerate(meta_values):
+            ttk.Label(stats_meta, text=title, style='GlassCardSubtitle.TLabel').grid(row=0, column=idx, sticky='w')
+            ttk.Label(stats_meta, textvariable=var, style='MetricValue.TLabel').grid(row=1, column=idx, sticky='w', pady=(4, 0))
+
+        source_card = ttk.Frame(detail_row, style='Card.TFrame', padding=(0, 0, 0, 24))
+        source_card.grid(row=0, column=1, sticky='nsew')
+        source_header = ttk.Frame(source_card, style='Card.TFrame', padding=(26, 20, 26, 10))
+        source_header.pack(fill='x')
+        ttk.Label(source_header, text="Signal-Quellen Übersicht", style='CardTitle.TLabel').pack(side='left')
+        ttk.Button(source_header, text="🔁 Aktualisieren", style='Link.TButton', command=self.refresh_statistics).pack(side='right')
 
         stats_columns = ('Quelle', 'Trades', 'Gewinnrate', 'Profit', 'Letzter Trade')
         heading_texts = {
@@ -2458,24 +2811,776 @@ class TradingGUI:
             'Letzter Trade': 180
         }
 
+        table_container = ttk.Frame(source_card, style='Card.TFrame', padding=(26, 0, 26, 0))
+        table_container.pack(fill='both', expand=True)
         self.stats_tree = ttk.Treeview(
-            source_frame,
+            table_container,
             columns=stats_columns,
             show='headings',
-            height=12,
+            height=13,
             style='Dashboard.Treeview'
         )
-        self.stats_tree.pack(fill='both', expand=True)
-
+        self.stats_tree.pack(side='left', fill='both', expand=True)
         for col in stats_columns:
             self.stats_tree.heading(col, text=heading_texts.get(col, col))
             self.stats_tree.column(col, width=column_widths.get(col, 140), anchor='w')
+        self.stats_tree.bind('<<TreeviewSelect>>', self._on_stats_tree_select)
 
-        actions_frame = ttk.Frame(stats_frame, style='Toolbar.TFrame', padding=(12, 10))
-        actions_frame.pack(fill='x', pady=(16, 0))
-        ttk.Button(actions_frame, text="🔁 Aktualisieren", style='Toolbar.TButton', command=self.refresh_statistics).pack(side='left')
-        ttk.Button(actions_frame, text="📤 Export", style='Toolbar.TButton', command=self.export_statistics).pack(side='left', padx=(10, 0))
+        stats_scroll = ttk.Scrollbar(table_container, orient='vertical', command=self.stats_tree.yview)
+        stats_scroll.pack(side='right', fill='y')
+        self.stats_tree.configure(yscrollcommand=stats_scroll.set)
 
+        # Initiales Rendering der Diagramme planen
+        if self.equity_curve_canvas:
+            self.equity_curve_canvas.after(50, lambda: self._draw_equity_curve(None))
+        if self.monthly_heatmap_canvas:
+            self.monthly_heatmap_canvas.after(50, lambda: self._draw_monthly_profit_heatmap(None))
+        if self.profit_distribution_canvas:
+            self.profit_distribution_canvas.after(50, lambda: self._draw_profit_distribution(None))
+        if self.session_heatmap_canvas:
+            self.session_heatmap_canvas.after(50, lambda: self._draw_session_heatmap(None))
+        if self.pair_distribution_canvas:
+            self.pair_distribution_canvas.after(50, lambda: self._draw_pair_distribution(None))
+        if self.accuracy_gauge_canvas:
+            self.accuracy_gauge_canvas.after(50, lambda: self._draw_accuracy_gauge(None))
+
+    def _build_dashboard_card(self, parent: ttk.Frame, title: str, value, *, icon: Optional[str] = None,
+                              subtitle: Optional[str] = None) -> ttk.Frame:
+        """Erzeugt eine kompakte Dashboard-Karte mit optionalem Icon."""
+        card = ttk.Frame(parent, style='Card.TFrame', padding=(22, 20))
+        if icon:
+            icon_frame = ttk.Frame(card, style='Card.TFrame')
+            icon_frame.pack(anchor='ne')
+            ttk.Label(icon_frame, text=icon, style='CardIcon.TLabel').pack(anchor='e')
+        ttk.Label(card, text=title, style='CardTitle.TLabel').pack(anchor='w')
+        if isinstance(value, tk.Variable):
+            ttk.Label(card, textvariable=value, style='MetricValue.TLabel').pack(anchor='w', pady=(8, 0))
+        else:
+            ttk.Label(card, text=str(value), style='MetricValue.TLabel').pack(anchor='w', pady=(8, 0))
+        if subtitle:
+            ttk.Label(card, text=subtitle, style='CardSubtitle.TLabel').pack(anchor='w', pady=(6, 0))
+        return card
+
+    def _refresh_symbol_exposure(self):
+        """Aktualisiert die Anzeige der Symbol-Exposures."""
+        if not self.exposure_list_frame:
+            return
+
+        for child in self.exposure_list_frame.winfo_children():
+            child.destroy()
+
+        exposures = self._get_symbol_exposure()
+        if not exposures:
+            ttk.Label(
+                self.exposure_list_frame,
+                text="Noch keine Trades erfasst",
+                style='GlassCardSubtitle.TLabel'
+            ).pack(anchor='w')
+            return
+
+        for symbol, share in exposures:
+            row = ttk.Frame(self.exposure_list_frame, style='GlassCard.TFrame')
+            row.pack(fill='x', pady=4)
+            ttk.Label(row, text=symbol, style='GlassCardSubtitle.TLabel').pack(side='left')
+            bar = ttk.Progressbar(row, style='Accent.Horizontal.TProgressbar', maximum=100, value=share)
+            bar.pack(side='left', fill='x', expand=True, padx=(12, 8))
+            ttk.Label(row, text=f"{share:.0f}%", style='GlassCardSubtitle.TLabel').pack(side='right')
+
+    def _get_symbol_exposure(self) -> List[tuple]:
+        """Berechnet die prozentuale Verteilung der offenen Positionen je Symbol."""
+        exposures: Dict[str, float] = {}
+        for record in self.bot.trade_tracker.trade_records.values():
+            lot_size = max(record.lot_size, 0.0)
+            exposures[record.symbol] = exposures.get(record.symbol, 0.0) + lot_size
+
+        total_volume = sum(exposures.values())
+        if total_volume > 0:
+            sorted_exposures = sorted(exposures.items(), key=lambda item: item[1], reverse=True)[:5]
+            return [
+                (symbol, min(100.0, (volume / total_volume) * 100.0))
+                for symbol, volume in sorted_exposures
+            ]
+
+        fallback_total = sum(weight for _, weight in self._default_pair_distribution)
+        return [
+            (symbol, (weight / fallback_total) * 100.0)
+            for symbol, weight in self._default_pair_distribution
+        ]
+
+    def _interpolate_color(self, start_hex: str, end_hex: str, factor: float) -> str:
+        """Interpoliert linear zwischen zwei Hex-Farben."""
+        factor = max(0.0, min(1.0, factor))
+        start_rgb = tuple(int(start_hex[i:i + 2], 16) for i in (1, 3, 5))
+        end_rgb = tuple(int(end_hex[i:i + 2], 16) for i in (1, 3, 5))
+        mixed = tuple(int(s + (e - s) * factor) for s, e in zip(start_rgb, end_rgb))
+        return '#{0:02x}{1:02x}{2:02x}'.format(*mixed)
+
+    def _draw_equity_curve(self, event):
+        """Zeichnet die Equity-Kurve auf dem Canvas."""
+        canvas = event.widget if event else self.equity_curve_canvas
+        if not canvas:
+            return
+
+        data = self._equity_curve_data or self._default_equity_curve
+        if not data:
+            return
+
+        width = canvas.winfo_width()
+        height = canvas.winfo_height()
+        if width <= 2 or height <= 2:
+            return
+
+        canvas.delete('all')
+        canvas.create_rectangle(0, 0, width, height, fill=self.theme_colors['surface_alt'], outline='')
+
+        margin = 32
+        min_val = min(data)
+        max_val = max(data)
+        value_range = max(max_val - min_val, 1)
+
+        points: List[float] = []
+        step = (width - 2 * margin) / max(len(data) - 1, 1)
+        for idx, value in enumerate(data):
+            x = margin + idx * step
+            normalized = (value - min_val) / value_range
+            y = height - margin - normalized * (height - 2 * margin)
+            points.extend((x, y))
+
+        if len(points) >= 4:
+            canvas.create_line(points, fill=self.theme_colors['accent'], width=3, smooth=True)
+            area_points = [margin, height - margin] + points + [points[-2], height - margin]
+            canvas.create_polygon(area_points, fill=self.theme_colors['accent_soft'], outline='')
+
+            last_value = data[-1]
+            canvas.create_text(
+                points[-2],
+                points[-1] - 16,
+                text=f"{last_value:,.0f}".replace(',', ' '),
+                fill=self.theme_colors['text'],
+                font=('Segoe UI Semibold', 11)
+            )
+
+    def _draw_profit_distribution(self, event):
+        """Zeigt die Profitverteilung als Histogramm an."""
+        canvas = event.widget if event else self.profit_distribution_canvas
+        if not canvas:
+            return
+
+        data = self._profit_distribution_data
+        if not data:
+            return
+
+        width = canvas.winfo_width()
+        height = canvas.winfo_height()
+        if width <= 2 or height <= 2:
+            return
+
+        canvas.delete('all')
+        canvas.create_rectangle(0, 0, width, height, fill=self.theme_colors['surface_alt'], outline='')
+
+        margin = 30
+        bar_area_width = width - 2 * margin
+        bar_width = bar_area_width / max(len(data), 1)
+        max_count = max(count for _, count in data) or 1
+
+        for idx, (bucket, count) in enumerate(data):
+            normalized = count / max_count
+            x0 = margin + idx * bar_width + 4
+            x1 = x0 + bar_width - 8
+            y1 = height - margin
+            y0 = y1 - normalized * (height - 2 * margin)
+            color = self.theme_colors['success'] if bucket >= 0 else self.theme_colors['danger']
+            canvas.create_rectangle(x0, y0, x1, y1, fill=color, outline='')
+            canvas.create_text(
+                (x0 + x1) / 2,
+                y0 - 10,
+                text=str(bucket),
+                fill=self.theme_colors['subtle_text'],
+                font=('Segoe UI', 9)
+            )
+
+        canvas.create_line(margin, height - margin, width - margin, height - margin, fill=self.theme_colors['border'])
+
+    def _draw_monthly_profit_heatmap(self, event):
+        """Zeichnet eine Monats-Heatmap."""
+        canvas = event.widget if event else self.monthly_heatmap_canvas
+        if not canvas:
+            return
+
+        data = self._monthly_profit_matrix
+        if not data:
+            return
+
+        rows = len(data)
+        cols = len(data[0]) if rows else 0
+        if rows == 0 or cols == 0:
+            return
+
+        width = canvas.winfo_width()
+        height = canvas.winfo_height()
+        if width <= 2 or height <= 2:
+            return
+
+        canvas.delete('all')
+        canvas.create_rectangle(0, 0, width, height, fill=self.theme_colors['surface_alt'], outline='')
+
+        min_val = min(min(row) for row in data)
+        max_val = max(max(row) for row in data)
+        value_range = max(max_val - min_val, 1)
+
+        margin_x = 40
+        margin_y = 24
+        cell_width = (width - 2 * margin_x) / cols
+        cell_height = (height - 2 * margin_y) / rows
+
+        month_labels = ['Jan', 'Feb', 'Mrz', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez']
+
+        for row_idx, row in enumerate(data):
+            for col_idx, value in enumerate(row):
+                intensity = (value - min_val) / value_range if value_range else 0.0
+                color = self._interpolate_color('#13213b', self.theme_colors['highlight'], intensity)
+                x0 = margin_x + col_idx * cell_width + 2
+                y0 = margin_y + row_idx * cell_height + 2
+                x1 = x0 + cell_width - 4
+                y1 = y0 + cell_height - 4
+                canvas.create_rectangle(x0, y0, x1, y1, fill=color, outline='')
+
+        for col_idx in range(cols):
+            label = month_labels[col_idx % len(month_labels)]
+            x = margin_x + col_idx * cell_width + cell_width / 2
+            canvas.create_text(x, margin_y - 10, text=label, fill=self.theme_colors['subtle_text'], font=('Segoe UI', 9))
+
+    def _draw_session_heatmap(self, event):
+        """Zeichnet eine Heatmap für Wochentage und Sessions."""
+        canvas = event.widget if event else self.session_heatmap_canvas
+        if not canvas:
+            return
+
+        data = self._current_session_heatmap
+        if not data:
+            return
+
+        rows = len(data)
+        cols = len(data[0]) if rows else 0
+        if rows == 0 or cols == 0:
+            return
+
+        width = canvas.winfo_width()
+        height = canvas.winfo_height()
+        if width <= 2 or height <= 2:
+            return
+
+        canvas.delete('all')
+        canvas.create_rectangle(0, 0, width, height, fill=self.theme_colors['surface_alt'], outline='')
+
+        max_value = max(max(row) for row in data) or 1
+        margin_x = 40
+        margin_y = 24
+        cell_width = (width - 2 * margin_x) / cols
+        cell_height = (height - 2 * margin_y) / rows
+
+        day_labels = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']
+        session_labels = ['00-04h', '04-08h', '08-12h', '12-16h', '16-20h', '20-24h']
+
+        for row_idx, row in enumerate(data):
+            for col_idx, value in enumerate(row):
+                intensity = value / max_value
+                color = self._interpolate_color('#1b253a', self.theme_colors['accent'], intensity)
+                x0 = margin_x + col_idx * cell_width + 2
+                y0 = margin_y + row_idx * cell_height + 2
+                x1 = x0 + cell_width - 4
+                y1 = y0 + cell_height - 4
+                canvas.create_rectangle(x0, y0, x1, y1, fill=color, outline='')
+
+        for col_idx in range(cols):
+            canvas.create_text(
+                margin_x + col_idx * cell_width + cell_width / 2,
+                margin_y - 8,
+                text=day_labels[col_idx % len(day_labels)],
+                fill=self.theme_colors['subtle_text'],
+                font=('Segoe UI', 9)
+            )
+
+        for row_idx in range(rows):
+            canvas.create_text(
+                margin_x - 28,
+                margin_y + row_idx * cell_height + cell_height / 2,
+                text=session_labels[row_idx % len(session_labels)],
+                fill=self.theme_colors['subtle_text'],
+                font=('Segoe UI', 9)
+            )
+
+    def _draw_pair_distribution(self, event):
+        """Zeichnet eine einfache Donut-Grafik für die Paar-Verteilung."""
+        canvas = event.widget if event else self.pair_distribution_canvas
+        if not canvas:
+            return
+
+        distribution = self._current_pair_distribution or self._default_pair_distribution
+        if not distribution:
+            return
+
+        width = canvas.winfo_width()
+        height = canvas.winfo_height()
+        if width <= 2 or height <= 2:
+            return
+
+        canvas.delete('all')
+        canvas.create_rectangle(0, 0, width, height, fill=self.theme_colors['surface_alt'], outline='')
+
+        total = sum(weight for _, weight in distribution) or 1
+        start_angle = 90
+        radius_margin = 16
+        palette = [self.theme_colors['accent'], self.theme_colors['success'], self.theme_colors['highlight'], '#a855f7', '#f97316']
+
+        for idx, (symbol, weight) in enumerate(distribution):
+            extent = (weight / total) * 360
+            color = palette[idx % len(palette)]
+            canvas.create_arc(
+                radius_margin,
+                radius_margin,
+                width - radius_margin,
+                height - radius_margin,
+                start=start_angle,
+                extent=extent,
+                style='pieslice',
+                fill=color,
+                outline=self.theme_colors['surface_alt']
+            )
+            start_angle += extent
+
+        canvas.create_oval(
+            radius_margin + 40,
+            radius_margin + 40,
+            width - radius_margin - 40,
+            height - radius_margin - 40,
+            fill=self.theme_colors['surface_alt'],
+            outline=self.theme_colors['surface_alt']
+        )
+
+        center_text = ', '.join(symbol for symbol, _ in distribution[:3])
+        canvas.create_text(
+            width / 2,
+            height / 2,
+            text=center_text,
+            fill=self.theme_colors['subtle_text'],
+            font=('Segoe UI', 9),
+            width=width - 120
+        )
+
+    def _draw_accuracy_gauge(self, event):
+        """Zeichnet eine halbkreisförmige Anzeige für die Genauigkeit."""
+        canvas = event.widget if event else self.accuracy_gauge_canvas
+        if not canvas:
+            return
+
+        width = canvas.winfo_width()
+        height = canvas.winfo_height()
+        if width <= 2 or height <= 2:
+            return
+
+        ratio = max(0.0, min(1.0, self._current_accuracy_ratio))
+
+        canvas.delete('all')
+        canvas.create_rectangle(0, 0, width, height, fill=self.theme_colors['surface_alt'], outline='')
+
+        margin = 24
+        start_angle = 135
+        max_extent = 270
+        canvas.create_arc(
+            margin,
+            margin,
+            width - margin,
+            height - margin,
+            start=start_angle,
+            extent=max_extent,
+            style='arc',
+            outline=self.theme_colors['border'],
+            width=10
+        )
+        canvas.create_arc(
+            margin,
+            margin,
+            width - margin,
+            height - margin,
+            start=start_angle,
+            extent=max_extent * ratio,
+            style='arc',
+            outline=self.theme_colors['success'],
+            width=12
+        )
+
+        canvas.create_text(
+            width / 2,
+            height / 2,
+            text=f"{ratio:.1f}",
+            fill=self.theme_colors['text'],
+            font=('Segoe UI Semibold', 16)
+        )
+
+    def _create_rule_row(
+        self,
+        container: ttk.Frame,
+        *,
+        title: str,
+        subtitle: str,
+        variable: Optional[tk.BooleanVar] = None,
+        command=None,
+        condition_parts: Optional[List[tuple]] = None,
+        action_parts: Optional[List[tuple]] = None
+    ) -> None:
+        """Hilfsfunktion zum Aufbau einer Automation-Regel."""
+        row = ttk.Frame(container, style='Rule.TFrame', padding=(18, 14))
+        row.pack(fill='x', pady=(0, 14))
+
+        header = ttk.Frame(row, style='Rule.TFrame')
+        header.pack(fill='x')
+        ttk.Label(header, text=title, style='RuleTitle.TLabel').pack(side='left')
+        if variable is not None:
+            ttk.Checkbutton(header, text="Aktiv", variable=variable, command=command, style='Switch.TCheckbutton').pack(side='right')
+
+        ttk.Label(row, text=subtitle, style='RuleSubtitle.TLabel').pack(anchor='w', pady=(8, 12))
+
+        if condition_parts:
+            condition_frame = ttk.Frame(row, style='RuleAccent.TFrame', padding=(12, 10))
+            condition_frame.pack(fill='x', pady=(0, 6))
+            for text, style in condition_parts:
+                ttk.Label(condition_frame, text=text, style=style).pack(side='left', padx=(0, 8))
+
+        if action_parts:
+            action_frame = ttk.Frame(row, style='RuleAccent.TFrame', padding=(12, 10))
+            action_frame.pack(fill='x')
+            for text, style in action_parts:
+                ttk.Label(action_frame, text=text, style=style).pack(side='left', padx=(0, 8))
+
+    def _refresh_automation_rules_display(self):
+        """Aktualisiert die Darstellung der Automation-Regeln."""
+        if not self.automation_rules_container:
+            return
+
+        for child in self.automation_rules_container.winfo_children():
+            child.destroy()
+
+        self._create_rule_row(
+            self.automation_rules_container,
+            title="Instant Trades",
+            subtitle="Führt Premium-Signale ohne Verzögerung aus.",
+            variable=self.instant_trading_var,
+            command=lambda key='instant_trading_enabled': self._handle_signal_flag_change(key),
+            condition_parts=[
+                ("IF", 'RulePillNeutral.TLabel'),
+                ("Chat", 'RulePillAccent.TLabel'),
+                ("IS PREMIUM", 'RulePillNeutral.TLabel'),
+                ("AND", 'RulePillNeutral.TLabel'),
+                ("Signal", 'RulePillAccent.TLabel'),
+                ("IS INSTANT", 'RulePillNeutral.TLabel')
+            ],
+            action_parts=[
+                ("THEN", 'RulePillNeutral.TLabel'),
+                ("Execute trade", 'RulePillAccent.TLabel'),
+                ("WITH", 'RulePillNeutral.TLabel'),
+                ("Risk Fixed", 'RulePillAccent.TLabel')
+            ]
+        )
+
+        self._create_rule_row(
+            self.automation_rules_container,
+            title="Zone Monitoring",
+            subtitle="Wartet auf Bestätigung innerhalb definierter Kurszonen.",
+            variable=self.zone_trading_var,
+            command=lambda key='zone_trading_enabled': self._handle_signal_flag_change(key),
+            condition_parts=[
+                ("IF", 'RulePillNeutral.TLabel'),
+                ("Signal", 'RulePillAccent.TLabel'),
+                ("IS ZONE", 'RulePillNeutral.TLabel'),
+                ("AND", 'RulePillNeutral.TLabel'),
+                ("Price", 'RulePillAccent.TLabel'),
+                ("REACHES", 'RulePillNeutral.TLabel'),
+                ("Zone", 'RulePillAccent.TLabel')
+            ],
+            action_parts=[
+                ("THEN", 'RulePillNeutral.TLabel'),
+                ("Queue trade", 'RulePillAccent.TLabel'),
+                ("FOR", 'RulePillNeutral.TLabel'),
+                ("Manual review", 'RulePillAccent.TLabel')
+            ]
+        )
+
+        self._create_rule_row(
+            self.automation_rules_container,
+            title="Bestätigung erforderlich",
+            subtitle="Blockiert Ausführung bei niedriger Signalqualität.",
+            variable=self.require_confirmation_var,
+            command=lambda key='require_confirmation': self._handle_signal_flag_change(key),
+            condition_parts=[
+                ("IF", 'RulePillNeutral.TLabel'),
+                ("Quality", 'RulePillAccent.TLabel'),
+                ("<", 'RulePillNeutral.TLabel'),
+                ("0.8", 'RulePillAccent.TLabel')
+            ],
+            action_parts=[
+                ("THEN", 'RulePillNeutral.TLabel'),
+                ("Require confirmation", 'RulePillAccent.TLabel')
+            ]
+        )
+
+        self._create_rule_row(
+            self.automation_rules_container,
+            title="Automatische SL/TP-Erkennung",
+            subtitle="Übernimmt Stop-Loss und Take-Profit aus Telegram-Signalen.",
+            variable=self.auto_tp_sl_var,
+            command=lambda key='auto_tp_sl': self._handle_signal_flag_change(key),
+            condition_parts=[
+                ("IF", 'RulePillNeutral.TLabel'),
+                ("Message", 'RulePillAccent.TLabel'),
+                ("CONTAINS", 'RulePillNeutral.TLabel'),
+                ("SL/TP", 'RulePillAccent.TLabel')
+            ],
+            action_parts=[
+                ("THEN", 'RulePillNeutral.TLabel'),
+                ("Parse levels", 'RulePillAccent.TLabel'),
+                ("AND", 'RulePillNeutral.TLabel'),
+                ("Apply automatically", 'RulePillAccent.TLabel')
+            ]
+        )
+
+    def _on_stats_tree_select(self, _event=None):
+        """Aktualisiert die Detail-Ansicht beim Wechsel der Quelle."""
+        if not hasattr(self, 'stats_tree'):
+            return
+
+        selection = self.stats_tree.selection()
+        if not selection:
+            self._update_chat_detail_card(None)
+            return
+
+        item = selection[0]
+        values = self.stats_tree.item(item).get('values')
+        chat_name = values[0] if values else None
+        self._update_chat_detail_card(chat_name)
+
+    def _update_chat_detail_card(self, chat_name: Optional[str]):
+        """Setzt die Detailmetriken auf Basis eines ausgewählten Chats."""
+        if not chat_name:
+            self.chat_detail_title_var.set("Chat-Statistiken – Auswahl")
+            self.detail_winrate_var.set("–")
+            self.detail_rr_var.set("–")
+            self.detail_signals_var.set("0")
+            self.detail_profit_var.set("0 €")
+            self._current_session_heatmap = [row[:] for row in self._default_session_heatmap]
+            self._current_pair_distribution = list(self._default_pair_distribution)
+            self._current_accuracy_ratio = 0.7
+        else:
+            self.chat_detail_title_var.set(f"Chat-Statistiken – {chat_name}")
+            trades = self.bot.trade_tracker.get_trades_by_source(chat_name)
+            total_trades = len(trades)
+            wins = sum(1 for trade in trades if trade.profit_loss > 0)
+            total_profit = sum(trade.profit_loss for trade in trades)
+            win_rate = (wins / total_trades * 100.0) if total_trades else 0.0
+            avg_gain = sum(trade.profit_loss for trade in trades if trade.profit_loss > 0) / max(wins, 1)
+            losses = total_trades - wins
+            avg_loss = abs(sum(trade.profit_loss for trade in trades if trade.profit_loss < 0) / max(losses, 1))
+            rr = avg_gain / avg_loss if avg_loss else avg_gain if avg_gain else 0.0
+
+            self.detail_winrate_var.set(f"{win_rate:.1f}%")
+            self.detail_rr_var.set(f"{rr:.2f}")
+            self.detail_signals_var.set(str(total_trades))
+            self.detail_profit_var.set(f"{self._format_compact_number(total_profit)} €")
+
+            self._current_session_heatmap = self._calculate_session_heatmap(trades)
+
+            distribution: Dict[str, float] = {}
+            for trade in trades:
+                distribution[trade.symbol] = distribution.get(trade.symbol, 0.0) + 1.0
+            total_distribution = sum(distribution.values()) or 1.0
+            self._current_pair_distribution = [
+                (symbol, weight / total_distribution)
+                for symbol, weight in sorted(distribution.items(), key=lambda item: item[1], reverse=True)[:5]
+            ] or list(self._default_pair_distribution)
+
+            self._current_accuracy_ratio = win_rate / 100.0 if total_trades else 0.7
+
+        if self.session_heatmap_canvas:
+            self._draw_session_heatmap(None)
+        if self.pair_distribution_canvas:
+            self._draw_pair_distribution(None)
+        if self.accuracy_gauge_canvas:
+            self._draw_accuracy_gauge(None)
+
+        if self.chat_detail_risk_var:
+            self.chat_detail_risk_var.set(f"{self.risk_percent_var.get():.1f}% Risiko")
+        if self.chat_detail_latency_var and self.latency_var:
+            self.chat_detail_latency_var.set(self.latency_var.get())
+        if self.chat_detail_quality_var and self.alert_score_var:
+            self.chat_detail_quality_var.set(self.alert_score_var.get())
+
+    def _calculate_session_heatmap(self, trades: List[TradeRecord]) -> List[List[int]]:
+        """Aggregiert Trades nach Wochentag und 4-Stunden-Blöcken."""
+        matrix = [[0 for _ in range(7)] for _ in range(6)]
+        for trade in trades:
+            if not trade.timestamp:
+                continue
+            day_index = trade.timestamp.weekday()
+            hour_block = min(5, trade.timestamp.hour // 4)
+            matrix[hour_block][day_index] += 1
+        return matrix
+
+    def _calculate_portfolio_metrics(self) -> Dict[str, float]:
+        """Berechnet aggregierte Kennzahlen für alle Trades."""
+        trades = sorted(self.bot.trade_tracker.trade_records.values(), key=lambda t: t.timestamp)
+        profits = [trade.profit_loss for trade in trades]
+        total_trades = len(profits)
+        if not profits:
+            return {
+                'total_profit': 0.0,
+                'win_rate': 0.0,
+                'total_trades': 0,
+                'sharpe': 0.0,
+                'sortino': 0.0,
+                'max_drawdown': 0.0,
+                'equity_curve': list(self._default_equity_curve)
+            }
+
+        total_profit = sum(profits)
+        wins = sum(1 for value in profits if value > 0)
+        win_rate = (wins / total_trades) * 100.0
+
+        mean = total_profit / total_trades
+        variance = sum((value - mean) ** 2 for value in profits) / total_trades
+        std_dev = math.sqrt(variance) if variance > 0 else 0.0
+        sharpe = (mean / std_dev) if std_dev else 0.0
+
+        downside = [min(0.0, value) for value in profits]
+        downside_variance = sum(value ** 2 for value in downside) / total_trades
+        sortino = (mean / math.sqrt(downside_variance)) if downside_variance > 0 else 0.0
+
+        equity = 10_000.0
+        equity_curve: List[float] = []
+        for profit in profits:
+            equity += profit
+            equity_curve.append(equity)
+
+        max_drawdown = self._calculate_max_drawdown(equity_curve)
+
+        return {
+            'total_profit': total_profit,
+            'win_rate': win_rate,
+            'total_trades': total_trades,
+            'sharpe': sharpe,
+            'sortino': sortino,
+            'max_drawdown': max_drawdown,
+            'equity_curve': equity_curve
+        }
+
+    def _calculate_max_drawdown(self, equity_series: List[float]) -> float:
+        """Berechnet den maximalen Drawdown in Prozent."""
+        if not equity_series:
+            return 0.0
+
+        peak = equity_series[0]
+        max_drawdown = 0.0
+        for value in equity_series:
+            peak = max(peak, value)
+            drawdown = (value - peak) / peak if peak else 0.0
+            max_drawdown = min(max_drawdown, drawdown)
+        return max_drawdown * 100.0
+
+    def _generate_equity_curve_series(self) -> List[float]:
+        """Erzeugt eine Beispiel-Kurve für den Startzustand."""
+        base = 35_000.0
+        series = []
+        for idx in range(90):
+            wave = math.sin(idx / 7.5) * 1_200
+            trend = idx * 120
+            series.append(base + wave + trend)
+        return series
+
+    def _generate_profit_distribution(self) -> List[tuple]:
+        """Erzeugt Beispielwerte für die Profitverteilung."""
+        buckets = [-600, -400, -200, 0, 200, 400, 600]
+        counts = [6, 12, 28, 40, 52, 34, 18]
+        return list(zip(buckets, counts))
+
+    def _generate_monthly_profit_matrix(self) -> List[List[float]]:
+        """Erzeugt eine 4x12 Heatmap mit Beispielzahlen."""
+        matrix: List[List[float]] = []
+        for row in range(4):
+            row_values = []
+            for col in range(12):
+                value = 50 * math.sin((col + row) / 2.3) + row * 30 + col * 12
+                row_values.append(value)
+            matrix.append(row_values)
+        return matrix
+
+    def _generate_session_heatmap_matrix(self) -> List[List[int]]:
+        """Erzeugt eine 6x7 Heatmap mit Beispielaktivität."""
+        matrix: List[List[int]] = []
+        for row in range(6):
+            row_values = []
+            for col in range(7):
+                value = max(0, int(4 + 3 * math.sin((row + col) / 1.8)))
+                row_values.append(value)
+            matrix.append(row_values)
+        return matrix
+
+    def _format_compact_number(self, value: float) -> str:
+        """Formatiert Zahlen mit schmalen Leerzeichen und Vorzeichen."""
+        formatted = f"{value:+,.0f}" if abs(value) >= 1 else f"{value:+.2f}"
+        return formatted.replace(',', ' ')
+
+    def _update_dashboard_metrics(self, total_sources: int, active_sources: int, total_signals: int):
+        """Aktualisiert Kennzahlen im Risk-Monitoring."""
+        if self.chat_total_var:
+            self.chat_total_var.set(str(total_sources))
+        if self.chat_active_var:
+            self.chat_active_var.set(str(active_sources))
+        if self.chat_signal_sum_var:
+            self.chat_signal_sum_var.set(str(total_signals))
+        if self.chat_summary_var:
+            self.chat_summary_var.set(f"{total_sources} Quellen • {active_sources} aktiv")
+        if self.chat_last_sync_var:
+            self.chat_last_sync_var.set(f"Letzte Synchronisierung: {datetime.now().strftime('%H:%M')} Uhr")
+
+        open_signals = [trade for trade in self.bot.trade_tracker.trade_records.values() if trade.status == 'open']
+        open_count = len(open_signals)
+        utilisation = min(100.0, open_count * 12.5)
+        if self.open_signal_progress_var:
+            self.open_signal_progress_var.set(utilisation)
+        if self.open_signal_percentage_var:
+            self.open_signal_percentage_var.set(f"{utilisation:.1f}% Auslastung")
+        if self.open_signal_active_var:
+            text = f"{open_count} aktive Signale" if open_count else "Keine offenen Signale"
+            self.open_signal_active_var.set(text)
+
+        compliance_alerts = sum(1 for trade in self.bot.trade_tracker.trade_records.values() if trade.profit_loss < -50)
+        if self.dashboard_compliance_var:
+            self.dashboard_compliance_var.set(f"{compliance_alerts} Compliance Alerts")
+
+        self._update_status_badges()
+
+    def _update_status_badges(self):
+        """Synchronisiert Statusanzeigen für Hero und Dashboard."""
+        if self.hero_status_var:
+            if self.bot.is_running:
+                status = "RUNNING" if self.bot.demo_mode else "LIVE"
+            else:
+                status = "SAFE"
+            self.hero_status_var.set(status)
+
+        if self.dashboard_state_var:
+            if self.bot.is_running and not self.bot.demo_mode:
+                self.dashboard_state_var.set("LIVE MODE")
+            elif self.bot.is_running:
+                self.dashboard_state_var.set("SAFE")
+            else:
+                self.dashboard_state_var.set("STANDBY")
+
+        if self.dashboard_alert_var:
+            compliance_alerts = sum(1 for trade in self.bot.trade_tracker.trade_records.values() if trade.profit_loss < -50)
+            if compliance_alerts:
+                self.dashboard_alert_var.set(f"{compliance_alerts} kritische Warnungen")
+            else:
+                self.dashboard_alert_var.set("Keine aktiven Warnungen")
     def clear_log(self):
         """Log-Anzeige leeren."""
         if hasattr(self, 'log_text'):
@@ -2534,10 +3639,15 @@ class TradingGUI:
         for item in self.chats_tree.get_children():
             self.chats_tree.delete(item)
 
+        total_signals = 0
+        active_count = 0
         for chat in chats_data:
             chat_source = self.bot.chat_manager.get_chat_info(chat['id'])
             is_monitored = "Ja" if chat_source and chat_source.enabled else "Nein"
             signal_count = chat_source.signal_count if chat_source else 0
+            total_signals += signal_count
+            if chat_source and chat_source.enabled:
+                active_count += 1
 
             self.chats_tree.insert('', 'end', values=(
                 chat['name'],
@@ -2549,15 +3659,8 @@ class TradingGUI:
             ))
 
         self.status_label.config(text=f"Chats geladen: {len(chats_data)}")
-        if hasattr(self, 'chat_summary_label'):
-            active_count = 0
-            for chat in chats_data:
-                info = self.bot.chat_manager.get_chat_info(chat['id'])
-                if info and info.enabled:
-                    active_count += 1
-            self.chat_summary_label.config(
-                text=f"Geladene Quellen: {len(chats_data)} | Aktiv: {active_count}"
-            )
+        self._update_dashboard_metrics(len(chats_data), active_count, total_signals)
+        self._refresh_symbol_exposure()
 
     def enable_monitoring(self):
         """Überwachung für ausgewählte Chats aktivieren"""
@@ -2607,8 +3710,15 @@ class TradingGUI:
         for item in self.stats_tree.get_children():
             self.stats_tree.delete(item)
 
+        total_sources = len(self.bot.chat_manager.chat_sources)
+        active_sources = 0
+        total_signals = 0
+
         for chat_source in self.bot.chat_manager.chat_sources.values():
             stats = self.bot.trade_tracker.get_source_statistics(chat_source.chat_name)
+            if chat_source.enabled:
+                active_sources += 1
+            total_signals += chat_source.signal_count
 
             last_trade = "Nie"
             if stats['last_trade']:
@@ -2618,9 +3728,55 @@ class TradingGUI:
                 chat_source.chat_name,
                 stats['total_trades'],
                 f"{stats['win_rate']:.1f}%",
-                f"{stats['total_profit']:.2f}",
+                self._format_compact_number(stats['total_profit']),
                 last_trade
             ))
+
+        metrics = self._calculate_portfolio_metrics()
+        total_profit = metrics['total_profit']
+        win_rate = metrics['win_rate']
+        sharpe = metrics['sharpe']
+        sortino = metrics['sortino']
+        max_drawdown = metrics['max_drawdown']
+
+        self.stats_profit_var.set(f"{self._format_compact_number(total_profit)} €")
+        self.stats_win_rate_var.set(f"{win_rate:.1f}%")
+        self.stats_sharpe_var.set(f"{sharpe:.2f}")
+        self.stats_sortino_var.set(f"{sortino:.2f}")
+        self.stats_drawdown_var.set(f"{max_drawdown:.1f}%")
+
+        self._equity_curve_data = metrics['equity_curve'] or list(self._default_equity_curve)
+        if self.equity_curve_canvas:
+            self._draw_equity_curve(None)
+        if self.profit_distribution_canvas:
+            self._draw_profit_distribution(None)
+
+        today = datetime.now().date()
+        daily_profit = sum(
+            trade.profit_loss
+            for trade in self.bot.trade_tracker.trade_records.values()
+            if trade.timestamp and trade.timestamp.date() == today
+        )
+        if self.dashboard_daily_loss_var:
+            self.dashboard_daily_loss_var.set(f"{self._format_compact_number(daily_profit)} €")
+        if self.dashboard_drawdown_var:
+            self.dashboard_drawdown_var.set(f"{max_drawdown:.1f}%")
+
+        if self.alert_score_var:
+            score = min(0.95, 0.45 + win_rate / 200.0)
+            self.alert_score_var.set(f"{score:.2f}")
+
+        self._update_dashboard_metrics(total_sources, active_sources, total_signals)
+        self._refresh_symbol_exposure()
+
+        if self.stats_tree.get_children():
+            selection = self.stats_tree.selection()
+            if not selection:
+                first_item = self.stats_tree.get_children()[0]
+                self.stats_tree.selection_set(first_item)
+            self._on_stats_tree_select()
+        else:
+            self._update_chat_detail_card(None)
 
         if hasattr(self, 'statistics_hint'):
             self.statistics_hint.config(
@@ -2648,7 +3804,8 @@ class TradingGUI:
         mode_text = "Demo-Modus" if self.bot.demo_mode else "LIVE-Modus"
         if hasattr(self, 'trade_status_label'):
             status_text = "Demo-Modus aktiv" if self.bot.demo_mode else "LIVE-Modus aktiv"
-            self.trade_status_label.config(text=status_text)
+            style = 'BadgeSuccess.TLabel' if self.bot.demo_mode else 'BadgeWarning.TLabel'
+            self.trade_status_label.config(text=status_text, style=style)
 
         trading_cfg = self.current_config.setdefault('trading', {})
         previous_value = trading_cfg.get('demo_mode')
@@ -2660,6 +3817,7 @@ class TradingGUI:
                 self.log_message(f"Fehler beim Speichern des Modus: {exc}")
 
         self.log_message(f"Modus geändert: {mode_text}")
+        self._update_status_badges()
 
     def on_execution_mode_change(self, *_):
         """Ausführungsmodus wechseln und speichern."""
@@ -2687,6 +3845,8 @@ class TradingGUI:
         else:
             if previous_value != mode.value:
                 self.log_message(f"Ausführungsmodus geändert zu: {selected_label}")
+
+        self._refresh_automation_rules_display()
 
     def start_bot(self):
         """Bot starten"""
@@ -2717,6 +3877,7 @@ class TradingGUI:
         self.bot_starting = False
         if self.start_button:
             self.start_button.config(state='normal')
+        self._update_status_badges()
 
     def handle_bot_start_failure(self):
         """Fehler beim Starten behandeln"""
@@ -2748,6 +3909,7 @@ class TradingGUI:
         self.bot_starting = False
         if self.start_button:
             self.start_button.config(state='normal')
+        self._update_status_badges()
 
     def setup_message_processing(self):
         """Message Queue Processing"""
@@ -3297,6 +4459,8 @@ class TradingGUI:
             label = self._signal_flag_labels.get(key, key)
             state_text = "aktiviert" if value else "deaktiviert"
             self.log_message(f"{label} wurde {state_text}.")
+
+        self._refresh_automation_rules_display()
 
     def _validate_float_value(self, proposed: str, min_value: str, _setting_key: str) -> bool:
         """Validiert Float-Eingaben für Spinboxen."""
