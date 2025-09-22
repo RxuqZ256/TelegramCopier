@@ -6,6 +6,7 @@
 import asyncio
 import math
 import os
+import sys
 import re
 import json
 import queue
@@ -31,6 +32,39 @@ from telethon.errors import (
 )
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, font as tkfont, filedialog
+
+# >>> ONBOARDING INTEGRATION (auto-added)
+import os, sys
+
+
+def run_onboarding_if_needed():
+    # Nur unter Windows und nur wenn Variablen fehlen
+    if os.name != "nt":
+        print("[onboarding] non-Windows -> skip")
+        return
+    if os.getenv("TG_API_ID") and os.getenv("TG_API_HASH") and os.getenv("TG_TARGET"):
+        print("[onboarding] env already set -> skip")
+        return
+    try:
+        import tkinter as tk
+        from ui.onboarding import run_onboarding
+    except Exception as e:
+        print(f"[onboarding] GUI not available -> skip ({e})")
+        return
+
+    root = tk.Tk(); root.withdraw()
+    cfg = run_onboarding(root)
+    if not cfg:
+        print("[onboarding] cancelled by user")
+        sys.exit(0)
+
+    os.environ["TG_API_ID"]   = str(cfg["api_id"])
+    os.environ["TG_API_HASH"] = cfg["api_hash"]
+    os.environ["TG_TARGET"]   = cfg["tg_target"]
+    if cfg.get("forward_to"):
+        os.environ["FORWARD_TO"] = cfg["forward_to"]
+    print("[onboarding] configuration loaded")
+# <<< ONBOARDING INTEGRATION
 
 # ==================== DATENSTRUKTUREN ====================
 
@@ -5108,6 +5142,7 @@ def prompt_for_api_credentials(config_manager: ConfigManager, config: Optional[D
 
 def main():
     """Hauptfunktion mit Setup-Assistent"""
+    run_onboarding_if_needed()
     if not show_startup_warning():
         print("Programm abgebrochen.")
         return
