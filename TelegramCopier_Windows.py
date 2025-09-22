@@ -277,9 +277,18 @@ class SignalProcessor:
     """Vereinfachter Signal-Prozessor (Demo)"""
 
     def __init__(self):
-        self.symbol_mapping = {
+        self.symbol_synonyms = {
             'GOLD': 'XAUUSD',
             'XAU': 'XAUUSD',
+            'XAUUSD': 'XAUUSD',
+            'SILVER': 'XAGUSD',
+            'XAG': 'XAGUSD',
+            'XAGUSD': 'XAGUSD',
+            'OIL': 'USOIL',
+            'WTI': 'USOIL',
+            'USOIL': 'USOIL',
+            'BRENT': 'UKOIL',
+            'UKOIL': 'UKOIL',
             'EURUSD': 'EURUSD',
             'EUR': 'EURUSD',
             'GBPUSD': 'GBPUSD',
@@ -288,14 +297,87 @@ class SignalProcessor:
             'USD': 'USDJPY'
         }
 
+        self.stopwords = {
+            'BUY', 'SELL', 'NOW', 'TP', 'SL', 'STOP', 'LOSS', 'TARGET', 'TARGETS',
+            'ENTRY', 'EXIT', 'OPEN', 'CLOSE', 'LONG', 'SHORT', 'MARKET', 'LIMIT',
+            'TP1', 'TP2', 'TP3', 'TP4', 'TP5', 'SL1', 'SL2', 'BE'
+        }
+
+        self.symbol_pattern = r'[A-Z][A-Z0-9]{1,9}(?:[/\-][A-Z0-9]{1,9})?'
+        bound_symbol = rf'(?<![A-Z0-9])(?P<symbol>{self.symbol_pattern})(?![A-Z0-9])'
+        price_pattern = r'(?P<price>[0-9]+[0-9\.,]*)'
+
+        def compile_patterns(templates: List[str]) -> List[re.Pattern]:
+            return [re.compile(template, re.IGNORECASE) for template in templates]
+
         self.patterns = {
-            'buy_now': r'(?i)\b(gold|xau|eurusd|eur|gbpusd|gbp|usdjpy|usd)\b.*\bbuy\b.*\bnow\b',
-            'sell_now': r'(?i)\b(gold|xau|eurusd|eur|gbpusd|gbp|usdjpy|usd)\b.*\bsell\b.*\bnow\b',
-            'buy_zone': r'(?i)\b(gold|xau|eurusd|eur|gbpusd|gbp|usdjpy|usd)\b.*\bbuy\b\s+([0-9]+\.?[0-9]*)',
-            'sell_zone': r'(?i)\b(gold|xau|eurusd|eur|gbpusd|gbp|usdjpy|usd)\b.*\bsell\b\s+([0-9]+\.?[0-9]*)'
+            'buy_now': compile_patterns([
+                rf'{bound_symbol}.*\bbuy\b.*\bnow\b',
+                rf'\bbuy\b.*\bnow\b.*{bound_symbol}',
+                rf'\bbuy\b.*{bound_symbol}.*\bnow\b'
+            ]),
+            'sell_now': compile_patterns([
+                rf'{bound_symbol}.*\bsell\b.*\bnow\b',
+                rf'\bsell\b.*\bnow\b.*{bound_symbol}',
+                rf'\bsell\b.*{bound_symbol}.*\bnow\b'
+            ]),
+            'buy_zone': compile_patterns([
+                rf'{bound_symbol}.*\bbuy\b.*?{price_pattern}',
+                rf'\bbuy\b.*{bound_symbol}.*?{price_pattern}',
+                rf'\bbuy\b.*?{price_pattern}.*{bound_symbol}'
+            ]),
+            'sell_zone': compile_patterns([
+                rf'{bound_symbol}.*\bsell\b.*?{price_pattern}',
+                rf'\bsell\b.*{bound_symbol}.*?{price_pattern}',
+                rf'\bsell\b.*?{price_pattern}.*{bound_symbol}'
+            ])
         }
 
         self.auto_tp_sl: bool = True
+
+    def _normalize_symbol(self, raw_symbol: str) -> Optional[str]:
+        if not raw_symbol:
+            return None
+
+        token = raw_symbol.upper().strip()
+        compact = re.sub(r'[^A-Z0-9]', '', token)
+
+        if not compact or len(compact) < 3:
+            return None
+
+        if compact in self.stopwords or token in self.stopwords:
+            return None
+
+        if re.match(r'^(TP|SL)\d*$', compact):
+            return None
+
+        if compact in self.symbol_synonyms:
+            return self.symbol_synonyms[compact]
+
+        if token in self.symbol_synonyms:
+            return self.symbol_synonyms[token]
+
+        return compact
+
+    def _match_patterns(self, key: str, message_text: str) -> Optional[Dict[str, Optional[float]]]:
+        patterns = self.patterns.get(key, [])
+        for pattern in patterns:
+            match = pattern.search(message_text)
+            if not match:
+                continue
+
+            symbol = self._normalize_symbol(match.group('symbol'))
+            if not symbol:
+                continue
+
+            price_value = None
+            price_text = match.groupdict().get('price')
+            if price_text is not None:
+                price_value = self._parse_price(price_text)
+
+            return {'symbol': symbol, 'price': price_value}
+
+        return None
 
     def _parse_price(self, value: str) -> Optional[float]:
         try:
@@ -328,15 +410,13 @@ class SignalProcessor:
         take_profits = self.extract_take_profits(message_text) if self.auto_tp_sl else []
 
         # Buy Now
-        match = re.search(self.patterns['buy_now'], message_text)
-        if match:
-            base = match.group(1).upper()
-            symbol = self.symbol_mapping.get(base, base)
+        result = self._match_patterns('buy_now', message_text)
+        if result:
             return {
                 'kind': 'trade',
                 'type': 'instant',
                 'action': 'BUY',
-                'symbol': symbol,
+                'symbol': result['symbol'],
                 'source': chat_source.chat_name,
                 'execution_mode': ExecutionMode.INSTANT,
                 'stop_loss': stop_loss,
@@ -344,15 +424,13 @@ class SignalProcessor:
             }
 
         # Sell Now
-        match = re.search(self.patterns['sell_now'], message_text)
-        if match:
-            base = match.group(1).upper()
-            symbol = self.symbol_mapping.get(base, base)
+        result = self._match_patterns('sell_now', message_text)
+        if result:
             return {
                 'kind': 'trade',
                 'type': 'instant',
                 'action': 'SELL',
-                'symbol': symbol,
+                'symbol': result['symbol'],
                 'source': chat_source.chat_name,
                 'execution_mode': ExecutionMode.INSTANT,
                 'stop_loss': stop_loss,
@@ -360,42 +438,34 @@ class SignalProcessor:
             }
 
         # Buy Zone
-        match = re.search(self.patterns['buy_zone'], message_text)
-        if match:
-            base = match.group(1).upper()
-            symbol = self.symbol_mapping.get(base, base)
-            entry_price = self._parse_price(match.group(2))
-            if entry_price is not None:
-                return {
-                    'kind': 'trade',
-                    'type': 'zone',
-                    'action': 'BUY',
-                    'symbol': symbol,
-                    'entry_price': entry_price,
-                    'source': chat_source.chat_name,
-                    'execution_mode': ExecutionMode.ZONE_WAIT,
-                    'stop_loss': stop_loss,
-                    'take_profits': take_profits
-                }
+        result = self._match_patterns('buy_zone', message_text)
+        if result and result['price'] is not None:
+            return {
+                'kind': 'trade',
+                'type': 'zone',
+                'action': 'BUY',
+                'symbol': result['symbol'],
+                'entry_price': result['price'],
+                'source': chat_source.chat_name,
+                'execution_mode': ExecutionMode.ZONE_WAIT,
+                'stop_loss': stop_loss,
+                'take_profits': take_profits
+            }
 
         # Sell Zone
-        match = re.search(self.patterns['sell_zone'], message_text)
-        if match:
-            base = match.group(1).upper()
-            symbol = self.symbol_mapping.get(base, base)
-            entry_price = self._parse_price(match.group(2))
-            if entry_price is not None:
-                return {
-                    'kind': 'trade',
-                    'type': 'zone',
-                    'action': 'SELL',
-                    'symbol': symbol,
-                    'entry_price': entry_price,
-                    'source': chat_source.chat_name,
-                    'execution_mode': ExecutionMode.ZONE_WAIT,
-                    'stop_loss': stop_loss,
-                    'take_profits': take_profits
-                }
+        result = self._match_patterns('sell_zone', message_text)
+        if result and result['price'] is not None:
+            return {
+                'kind': 'trade',
+                'type': 'zone',
+                'action': 'SELL',
+                'symbol': result['symbol'],
+                'entry_price': result['price'],
+                'source': chat_source.chat_name,
+                'execution_mode': ExecutionMode.ZONE_WAIT,
+                'stop_loss': stop_loss,
+                'take_profits': take_profits
+            }
 
         if self.auto_tp_sl and (stop_loss is not None or take_profits):
             return {
