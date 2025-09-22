@@ -1141,26 +1141,152 @@ class MultiChatTradingBot:
             self.log(f"Trade {target_ticket} konnte nicht aktualisiert werden.", "WARNING")
             return
 
-        self.log(
-            f"Trade {record.ticket} aktualisiert: SL={record.stop_loss:.2f} TP={record.take_profit:.2f}"
-        )
+        def _safe_float(value):
+            if value is None:
+                return None
+            try:
+                if isinstance(value, str):
+                    value = value.replace(',', '.')
+                return float(value)
+            except (TypeError, ValueError):
+                return None
 
-        self.send_message('TRADE_UPDATED', {
-            'ticket': record.ticket,
-            'symbol': record.symbol,
-            'stop_loss': record.stop_loss,
-            'take_profit': record.take_profit,
-            'take_profits': take_profits,
-            'source': chat_source.chat_name
-        })
+        mt5_success = True
+        if not self.demo_mode:
+            mt5_success = False
+            if not self.ensure_mt5_session():
+                self.log(
+                    f"MT5-Session für Update von Ticket {record.ticket} nicht verfügbar.",
+                    "ERROR"
+                )
+            else:
+                ticket_int = None
+                ticket_value = str(record.ticket).strip()
+                try:
+                    ticket_int = int(ticket_value)
+                except (TypeError, ValueError):
+                    try:
+                        ticket_int = int(float(ticket_value))
+                    except (TypeError, ValueError):
+                        self.log(
+                            f"Ticket {record.ticket} ist keine gültige MT5-Ticketnummer.",
+                            "ERROR"
+                        )
 
-        if pending:
-            if stop_loss is not None:
-                pending['awaiting_sl'] = False
-            if take_profits:
-                pending['awaiting_tp'] = False
-            if not pending['awaiting_sl'] and not pending['awaiting_tp']:
-                self.pending_trade_updates.pop(chat_source.chat_id, None)
+                position = None
+                if ticket_int is not None:
+                    try:
+                        positions = mt5.positions_get(ticket=ticket_int)
+                    except Exception as exc:
+                        self.log(
+                            f"MT5-Positionen für Ticket {record.ticket} konnten nicht abgerufen werden: {exc}",
+                            "ERROR"
+                        )
+                        positions = None
+                    if positions:
+                        position = positions[0]
+                    else:
+                        self.log(
+                            f"Keine offene MT5-Position für Ticket {record.ticket} gefunden.",
+                            "ERROR"
+                        )
+
+                if position is not None:
+                    modify_action = getattr(mt5, 'TRADE_ACTION_SLTP', None) or getattr(mt5, 'TRADE_ACTION_MODIFY', None)
+                    if modify_action is None:
+                        self.log(
+                            "MT5 unterstützt keine Aktualisierung von Stop-Loss/Take-Profit.",
+                            "ERROR"
+                        )
+                    else:
+                        sl_value = _safe_float(record.stop_loss)
+                        tp_value = None
+                        if take_profits:
+                            tp_value = _safe_float(take_profits[0])
+                        if tp_value is None:
+                            tp_value = _safe_float(record.take_profit)
+
+                        if sl_value is None and tp_value is None:
+                            self.log(
+                                f"Keine gültigen SL/TP-Werte für Ticket {record.ticket} vorhanden.",
+                                "ERROR"
+                            )
+                        else:
+                            current_sl = _safe_float(getattr(position, 'sl', None)) or 0.0
+                            current_tp = _safe_float(getattr(position, 'tp', None)) or 0.0
+                            request = {
+                                'action': modify_action,
+                                'position': getattr(position, 'ticket', ticket_int),
+                                'symbol': getattr(position, 'symbol', record.symbol),
+                                'sl': float(sl_value) if sl_value is not None else float(current_sl),
+                                'tp': float(tp_value) if tp_value is not None else float(current_tp),
+                                'magic': getattr(position, 'magic', 0),
+                                'comment': f"Telegram Update {chat_source.chat_name}"[:31]
+                            }
+
+                            try:
+                                result = mt5.order_send(request)
+                            except Exception as exc:
+                                self.log(
+                                    f"MT5-Update für Ticket {record.ticket} konnte nicht gesendet werden: {exc}",
+                                    "ERROR"
+                                )
+                                result = None
+
+                            if result is None:
+                                error = self._format_mt5_error(mt5.last_error())
+                                self.log(
+                                    f"MT5 lieferte kein Ergebnis für Update von Ticket {record.ticket}: {error}",
+                                    "ERROR"
+                                )
+                            else:
+                                success_codes = set()
+                                for name in ('TRADE_RETCODE_DONE', 'TRADE_RETCODE_DONE_PARTIAL', 'TRADE_RETCODE_PLACED'):
+                                    if hasattr(mt5, name):
+                                        success_codes.add(getattr(mt5, name))
+                                if not success_codes and hasattr(mt5, 'TRADE_RETCODE_DONE'):
+                                    success_codes.add(getattr(mt5, 'TRADE_RETCODE_DONE'))
+
+                                if result.retcode not in success_codes:
+                                    error_text = result.comment or self._format_mt5_error(mt5.last_error())
+                                    self.log(
+                                        f"MT5-Update für Ticket {record.ticket} abgelehnt (Retcode {result.retcode}): {error_text}",
+                                        "ERROR"
+                                    )
+                                else:
+                                    mt5_success = True
+                                    self.log(
+                                        f"MT5-Position {record.ticket} aktualisiert: SL={request['sl']:.2f} TP={request['tp']:.2f}",
+                                        "INFO"
+                                    )
+
+        if mt5_success:
+            sl_display = _safe_float(record.stop_loss)
+            tp_display = _safe_float(record.take_profit)
+            sl_text = f"{sl_display:.2f}" if sl_display is not None else "-"
+            tp_text = f"{tp_display:.2f}" if tp_display is not None else "-"
+
+            self.log(
+                f"Trade {record.ticket} aktualisiert: SL={sl_text} TP={tp_text}",
+                "INFO"
+            )
+
+            self.send_message('TRADE_UPDATED', {
+                'ticket': record.ticket,
+                'symbol': record.symbol,
+                'stop_loss': record.stop_loss,
+                'take_profit': record.take_profit,
+                'take_profits': take_profits,
+                'source': chat_source.chat_name
+            })
+
+            if pending:
+                if stop_loss is not None:
+                    pending['awaiting_sl'] = False
+                if take_profits:
+                    pending['awaiting_tp'] = False
+                if not pending['awaiting_sl'] and not pending['awaiting_tp']:
+                    self.pending_trade_updates.pop(chat_source.chat_id, None)
 
     async def load_all_chats(self):
         """Alle verfügbaren Chats laden"""
