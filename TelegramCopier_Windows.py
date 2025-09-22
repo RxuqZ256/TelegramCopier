@@ -66,22 +66,13 @@ def run_onboarding_if_needed():
     print("[onboarding] configuration loaded")
 # <<< numpy/mt5 guard + onboarding bootstrap
 
-# >>> UI bootstrap + flags
+# >>> UI bootstrap
 def _start_ui():
     from ui.app import run_app
 
     session_info = {"tg_target": os.getenv("TG_TARGET", ""), "user": "local"}
-    run_app(session=session_info)
-
-
-def handle_cli_flags() -> bool:
-    if "--ui" in sys.argv:
-        if "--setup" in sys.argv:
-            run_onboarding_if_needed()
-        _start_ui()
-        return True
-    return False
-# <<< UI bootstrap + flags
+    run_app(session=session_info, initial_page="settings")
+# <<< UI bootstrap
 
 # ---- optionale Abhängigkeit: MetaTrader5 (nur für Windows verfügbar) ----
 try:
@@ -2215,17 +2206,40 @@ class TradingGUI:
 
         self._update_status_badges()
 
-    def _open_bot_settings_from_header(self):
-        """Wechselt vom Header direkt zum Bot-Einstellungs-Tab."""
-        if hasattr(self, 'notebook'):
+    def set_initial_page(self, page_key: str) -> None:
+        """Select the requested notebook page when the UI starts."""
+        if not hasattr(self, 'notebook'):
+            return
+
+        normalized = (page_key or '').strip().lower()
+        target: Optional[object] = None
+
+        if normalized in {'settings', 'bot', 'bot_settings'} and hasattr(self, 'bot_settings_tab'):
+            target = self.bot_settings_tab
+        elif normalized in {'dashboard', 'home'} and hasattr(self, 'dashboard_tab'):
+            target = self.dashboard_tab
+        elif hasattr(self, 'dashboard_tab'):
+            target = self.dashboard_tab
+
+        if target is None:
+            tabs = self.notebook.tabs()
+            if tabs:
+                target = tabs[0]
+
+        if target is not None:
             try:
-                self.notebook.select(1)
+                self.notebook.select(target)
             except Exception:
                 pass
+
+    def _open_bot_settings_from_header(self):
+        """Wechselt vom Header direkt zum Bot-Einstellungs-Tab."""
+        self.set_initial_page('settings')
 
     def create_chat_overview_tab(self):
         """Tab für die Chat-Übersicht"""
         chat_frame = ttk.Frame(self.notebook, padding=(24, 24, 24, 20), style='Main.TFrame')
+        self.dashboard_tab = chat_frame
         self.notebook.add(chat_frame, text="Risk Monitor")
 
         header = ttk.Frame(chat_frame, style='Main.TFrame')
@@ -2419,6 +2433,7 @@ class TradingGUI:
     def create_bot_settings_tab(self):
         """Tab für Bot-Einstellungen und Status"""
         settings_tab = ttk.Frame(self.notebook, padding=(24, 24, 24, 20), style='Main.TFrame')
+        self.bot_settings_tab = settings_tab
         self.notebook.add(settings_tab, text="Automationen")
 
         header = ttk.Frame(settings_tab, style='Main.TFrame')
@@ -5175,9 +5190,6 @@ def prompt_for_api_credentials(config_manager: ConfigManager, config: Optional[D
 
 def main():
     """Hauptfunktion mit Setup-Assistent"""
-    if handle_cli_flags():
-        return
-
     run_onboarding_if_needed()
     if not show_startup_warning():
         print("Programm abgebrochen.")
