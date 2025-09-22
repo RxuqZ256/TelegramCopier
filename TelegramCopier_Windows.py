@@ -3003,14 +3003,18 @@ class TradingGUI:
 
     def browse_mt5_path(self):
         """Dateidialog zum Auswählen des MT5-Terminals öffnen."""
-        if not MT5_AVAILABLE:
-            message = "MetaTrader5-Python-Modul ist nicht verfügbar."
+        module_missing = not MT5_AVAILABLE
+        if module_missing:
+            message = (
+                "MetaTrader5-Python-Modul ist nicht verfügbar. "
+                "Sie können den Terminalpfad trotzdem auswählen und speichern; "
+                "installieren Sie das Paket anschließend, um die Verbindung zu aktivieren."
+            )
             self.log_message(message)
             try:
-                messagebox.showwarning("MT5 nicht verfügbar", message)
+                messagebox.showwarning("MT5-Modul nicht installiert", message)
             except Exception:
                 pass
-            return
 
         try:
             selected = filedialog.askopenfilename(
@@ -3036,7 +3040,13 @@ class TradingGUI:
 
         self.save_mt5_credentials(silent=True)
         self._refresh_mt5_status_display()
-        self.log_message("MT5-Terminalpfad aktualisiert.")
+        if module_missing:
+            self.log_message(
+                "MT5-Terminalpfad gespeichert. Installieren Sie das MetaTrader5-Python-Modul, "
+                "um die Verbindung testen zu können."
+            )
+        else:
+            self.log_message("MT5-Terminalpfad aktualisiert.")
 
     def _add_trading_var_trace(self, key: str, var: tk.Variable, caster):
         """Trace für Trading-Variablen registrieren."""

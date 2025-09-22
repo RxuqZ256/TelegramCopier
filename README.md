@@ -18,9 +18,10 @@ Wenn du Anpassungen an den PyInstaller-Optionen vornehmen möchtest (z.B. `--one
 ## MT5-Verbindung konfigurieren
 
 1. Starte die Anwendung und öffne den Tab **„Bot Einstellungen“**.
-2. Trage dort Login (Kontonummer), Passwort und Server deines MetaTrader-5-Kontos – Demo oder Live – ein. Optional kannst du den Pfad zur `terminal64.exe` deines Terminals hinterlegen.
-3. Speichere die Eingaben mit **„Zugangsdaten speichern“**. Die Daten landen in `trading_config.json` und werden direkt an den Bot übergeben.
-4. Mit **„Verbindung testen“** prüfst du sofort, ob die MT5-Schnittstelle erreichbar ist und der Bot Orders platzieren kann. Bei Erfolg zeigt der Dialog zusätzliche Konto-Informationen (Login, Balance, Währung), damit du sicher weißt, welches Konto verbunden ist.
-5. Der Statusbereich im Tab informiert darüber, ob die Zugangsdaten vollständig sind und blendet nach einem erfolgreichen Test die aktuelle Kontoübersicht ein.
+2. Trage dort Login (Kontonummer), Passwort und Server deines gewünschten MetaTrader-5-Kontos ein. Optional kannst du den Pfad zur `terminal64.exe` des Terminals hinterlegen, falls du mehrere Installationen nutzt.
+3. Speichere die Eingaben mit **„Zugangsdaten speichern“**. Die Daten landen in `trading_config.json`, damit der Bot sie beim nächsten Start automatisch verwendet.
+4. Öffne dein MetaTrader-5-Terminal, melde dich im gewünschten Konto an und klicke anschließend auf **„Verbindung testen“**. Der Bot prüft damit die Schnittstelle und zeigt bei Erfolg Konto-Informationen (Login, Balance, Währung), damit du siehst, welches Konto angebunden ist.
+5. Der Statusbereich im Tab informiert darüber, ob die Zugangsdaten vollständig sind. Nach einem erfolgreichen Test erscheint dort die aktuelle Kontoübersicht, bis du die Daten änderst.
+6. Falls das Python-Modul `MetaTrader5` noch fehlt, kannst du die Felder trotzdem ausfüllen und den Terminalpfad auswählen. Installiere das Paket später (z. B. mit `pip install MetaTrader5`) und starte die Anwendung neu, um die Verbindung zu aktivieren.
 
 > Hinweis: Ohne installiertes MetaTrader5-Python-Modul bleibt der Live-Modus deaktiviert. Die Felder kannst du trotzdem ausfüllen; der Status erinnert dich daran, das Paket nachzuinstallieren. Installiere MetaTrader 5 inklusive des Python-Pakets `MetaTrader5`, damit die Verbindung funktioniert.
