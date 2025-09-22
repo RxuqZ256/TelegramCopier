@@ -3485,76 +3485,365 @@ class SetupAssistant:
 
     def show_setup_dialog(self):
         """Setup-Dialog anzeigen"""
+        # --- Window setup & theme ---
         self.window = tk.Toplevel(self.parent)
-        self.window.title("Erste Einrichtung")
-        self.window.geometry("600x500")
+        self.window.title("Welcome · Telegram Copier")
+        self.window.geometry("760x620")
+        self.window.configure(bg="#050B16")
+        self.window.resizable(False, False)
         self.window.grab_set()  # Modal
 
-        header_frame = ttk.Frame(self.window)
-        header_frame.pack(fill='x', padx=20, pady=20)
+        background = "#050B16"
+        surface = "#0B1624"
+        neon_blue = "#38BDF8"
+        neon_green = "#34D399"
+        subdued = "#94A3B8"
 
-        ttk.Label(header_frame, text="Multi-Chat Trading Bot Setup",
-                  font=('Arial', 16, 'bold')).pack()
+        style = ttk.Style(self.window)
+        try:
+            style.theme_use('clam')
+        except tk.TclError:
+            pass
 
-        ttk.Label(header_frame,
-                  text="Willkommen! Bitte konfigurieren Sie Ihre Telegram-Verbindung.",
-                  wraplength=500).pack(pady=(10, 0))
+        style.configure("DarkRoot.TFrame", background=background)
+        style.configure("Dark.TFrame", background=background)
+        style.configure("Title.TLabel", background=background, foreground="#F8FAFC",
+                        font=("Segoe UI Semibold", 20))
+        style.configure("Subtitle.TLabel", background=background, foreground=neon_blue,
+                        font=("Segoe UI", 12))
+        style.configure("Dark.TLabel", background=background, foreground="#CBD5F5",
+                        font=("Segoe UI", 10))
+        style.configure("Accent.TLabel", background=background, foreground=neon_blue,
+                        font=("Segoe UI Semibold", 10))
+        style.configure("Card.TFrame", background=surface)
+        style.configure("CardTitle.TLabel", background=surface, foreground="#F8FAFC",
+                        font=("Segoe UI Semibold", 13))
+        style.configure("Card.TLabel", background=surface, foreground="#E2E8F0",
+                        font=("Segoe UI", 10))
+        style.configure("MutedCard.TLabel", background=surface, foreground=subdued,
+                        font=("Segoe UI", 9))
+        style.configure("Dark.TCheckbutton", background=surface, foreground="#E2E8F0",
+                        font=("Segoe UI", 10))
+        style.map("Dark.TCheckbutton",
+                  background=[('active', surface)],
+                  foreground=[('disabled', '#475569')])
+        style.configure("Dark.TButton", background=background, foreground="#E2E8F0",
+                        font=("Segoe UI", 10))
+        style.map("Dark.TButton",
+                  background=[('active', '#0B182A')],
+                  foreground=[('disabled', '#475569')])
+        entry_style = "Dark.TEntry"
+        style.configure(entry_style,
+                        foreground="#F8FAFC",
+                        fieldbackground="#0F1E33",
+                        background="#0F1E33",
+                        bordercolor="#1E293B",
+                        insertcolor="#F8FAFC")
+        style.map(entry_style,
+                  fieldbackground=[('focus', '#132542')],
+                  bordercolor=[('focus', neon_blue)],
+                  foreground=[('disabled', '#64748B')])
 
-        warning_frame = ttk.LabelFrame(self.window, text="WICHTIGE WARNUNG", padding="15")
-        warning_frame.pack(fill='x', padx=20, pady=(0, 20))
+        # --- Helper utilities for drawing custom shapes ---
+        def hex_to_rgb(value: str) -> tuple[int, int, int]:
+            value = value.lstrip('#')
+            return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
 
-        warning_text = (
-            "ACHTUNG: Dieses System führt automatische Trades aus!\n\n"
-            "• Verwenden Sie IMMER zuerst den Demo-Modus\n"
-            "• Testen Sie alle Funktionen gründlich\n"
-            "• Automatisiertes Trading birgt hohe Verlustrisiken\n"
-            "• Überwachen Sie das System kontinuierlich\n"
-            "• Setzen Sie strikte Risikogrenzen\n\n"
-            "Der Autor übernimmt keine Haftung für finanzielle Verluste!"
-        )
-        ttk.Label(warning_frame, text=warning_text, foreground='red',
-                  wraplength=500).pack()
+        def blend(color_a: str, color_b: str, factor: float) -> str:
+            ra, ga, ba = hex_to_rgb(color_a)
+            rb, gb, bb = hex_to_rgb(color_b)
+            blended = (
+                int(ra + (rb - ra) * factor),
+                int(ga + (gb - ga) * factor),
+                int(ba + (bb - ba) * factor)
+            )
+            return '#{:02x}{:02x}{:02x}'.format(*blended)
 
-        form_frame = ttk.LabelFrame(self.window, text="Telegram API Konfiguration", padding="15")
-        form_frame.pack(fill='x', padx=20, pady=(0, 20))
+        def create_rounded_rect(canvas: tk.Canvas, x1: int, y1: int, x2: int, y2: int,
+                                radius: int = 20, **kwargs) -> int:
+            if radius <= 0:
+                return canvas.create_rectangle(x1, y1, x2, y2, **kwargs)
+            points = [
+                x1 + radius, y1,
+                x2 - radius, y1,
+                x2, y1,
+                x2, y1 + radius,
+                x2, y2 - radius,
+                x2, y2,
+                x2 - radius, y2,
+                x1 + radius, y2,
+                x1, y2,
+                x1, y2 - radius,
+                x1, y1 + radius,
+                x1, y1
+            ]
+            return canvas.create_polygon(points, smooth=True, **kwargs)
 
-        instructions = (
-            "1. Gehen Sie zu https://my.telegram.org/auth\n"
-            "2. Loggen Sie sich ein und erstellen Sie eine neue App\n"
-            "3. Kopieren Sie API ID und API Hash hierher"
-        )
-        ttk.Label(form_frame, text=instructions, wraplength=500).pack(pady=(0, 15))
+        # --- Layout containers ---
+        container = ttk.Frame(self.window, style="DarkRoot.TFrame", padding=30)
+        container.pack(fill='both', expand=True)
+
+        header = ttk.Frame(container, style="Dark.TFrame")
+        header.pack(fill='x')
+
+        ttk.Label(header, text="Multi-Chat Trading Bot", style="Title.TLabel").pack(anchor='w')
+        ttk.Label(
+            header,
+            text="Enter your Telegram credentials to power the copier bot.",
+            style="Subtitle.TLabel"
+        ).pack(anchor='w', pady=(6, 24))
+
+        # --- Progress indicator ---
+        progress_frame = tk.Frame(container, bg=background)
+        progress_frame.pack(fill='x', pady=(0, 30))
+
+        steps = [
+            ("Account", "Create Telegram app"),
+            ("API", "Add credentials"),
+            ("Verify", "Confirm login"),
+            ("Launch", "Start bot")
+        ]
+        active_index = 1  # Highlight the credential input stage
+
+        progress_canvas = tk.Canvas(progress_frame, height=100, bg=background, highlightthickness=0)
+        progress_canvas.pack(fill='x', expand=True)
+
+        def draw_progress(_: Optional[object] = None) -> None:
+            width = progress_canvas.winfo_width()
+            progress_canvas.delete('all')
+            if width <= 0:
+                return
+
+            margin = 40
+            radius = 20
+            y = 32
+            spacing = 0
+            if len(steps) > 1:
+                spacing = (width - 2 * margin) / (len(steps) - 1)
+
+            for idx, (title, caption) in enumerate(steps):
+                x = margin + spacing * idx
+                if idx < len(steps) - 1:
+                    next_x = margin + spacing * (idx + 1)
+                    line_color = '#1F2A3A'
+                    if idx < active_index:
+                        line_color = neon_green
+                    elif idx == active_index:
+                        line_color = neon_blue
+                    progress_canvas.create_line(
+                        x + radius, y,
+                        next_x - radius, y,
+                        fill=line_color,
+                        width=4,
+                        capstyle=tk.ROUND
+                    )
+
+                fill_color = '#1F2A3A'
+                outline_color = '#1F2A3A'
+                text_color = subdued
+                caption_color = '#475569'
+                if idx < active_index:
+                    fill_color = neon_green
+                    outline_color = neon_green
+                    text_color = background
+                    caption_color = '#A7F3D0'
+                elif idx == active_index:
+                    fill_color = neon_blue
+                    outline_color = neon_blue
+                    text_color = background
+                    caption_color = '#BAE6FD'
+
+                progress_canvas.create_oval(
+                    x - radius,
+                    y - radius,
+                    x + radius,
+                    y + radius,
+                    fill=fill_color,
+                    outline=outline_color,
+                    width=2
+                )
+                progress_canvas.create_text(
+                    x,
+                    y,
+                    text=str(idx + 1),
+                    fill=text_color,
+                    font=("Segoe UI Semibold", 12)
+                )
+                progress_canvas.create_text(
+                    x,
+                    y + radius + 14,
+                    text=title,
+                    fill='#E2E8F0' if idx <= active_index else subdued,
+                    font=("Segoe UI Semibold", 11)
+                )
+                progress_canvas.create_text(
+                    x,
+                    y + radius + 34,
+                    text=caption,
+                    fill=caption_color,
+                    font=("Segoe UI", 9)
+                )
+
+        progress_canvas.bind('<Configure>', draw_progress)
+        draw_progress()
+
+        # --- Credential card ---
+        card_wrapper = tk.Frame(container, bg=background)
+        card_wrapper.pack(fill='x')
+
+        card_canvas = tk.Canvas(card_wrapper, bg=background, highlightthickness=0)
+        card_canvas.pack(fill='x', expand=True)
+
+        card_frame = tk.Frame(card_canvas, bg=surface)
+        card_window = card_canvas.create_window(0, 0, anchor='n', window=card_frame)
+
+        def layout_card(_: Optional[object] = None) -> None:
+            card_canvas.update_idletasks()
+            width = card_canvas.winfo_width()
+            if width <= 200:
+                return
+            desired_height = card_frame.winfo_reqheight() + 40
+            if desired_height < 200:
+                desired_height = 200
+            card_canvas.config(height=desired_height)
+            card_canvas.delete('card-bg')
+            create_rounded_rect(
+                card_canvas,
+                10,
+                10,
+                width - 10,
+                desired_height - 10,
+                radius=24,
+                fill=surface,
+                outline="#1E293B",
+                width=2,
+                tags=('card-bg',)
+            )
+            inner_width = width - 80
+            card_canvas.coords(card_window, width / 2, 30)
+            card_canvas.itemconfigure(card_window, anchor='n')
+            card_canvas.itemconfigure(card_window, width=inner_width)
+
+        card_canvas.bind('<Configure>', layout_card)
+        layout_card()
+
+        ttk.Label(card_frame, text="Connect to Telegram", style="CardTitle.TLabel").pack(anchor='w')
+        ttk.Label(
+            card_frame,
+            text="Grab your API keys from my.telegram.org and drop them in below.",
+            style="MutedCard.TLabel",
+            wraplength=580,
+            justify='left'
+        ).pack(anchor='w', pady=(6, 18))
 
         telegram_cfg = self.current_config.get('telegram', {})
 
-        ttk.Label(form_frame, text="API ID:").pack(anchor='w')
+        form_inner = ttk.Frame(card_frame, style="Card.TFrame")
+        form_inner.pack(fill='x')
+
+        ttk.Label(form_inner, text="API ID", style="Card.TLabel").pack(anchor='w')
         self.setup_api_id = tk.StringVar(value=str(telegram_cfg.get('api_id', "")))
-        ttk.Entry(form_frame, textvariable=self.setup_api_id, width=40).pack(fill='x', pady=(0, 10))
+        ttk.Entry(form_inner, textvariable=self.setup_api_id, style=entry_style).pack(fill='x', pady=(4, 14))
 
-        ttk.Label(form_frame, text="API Hash:").pack(anchor='w')
+        ttk.Label(form_inner, text="API Hash", style="Card.TLabel").pack(anchor='w')
         self.setup_api_hash = tk.StringVar(value=str(telegram_cfg.get('api_hash', "")))
-        ttk.Entry(form_frame, textvariable=self.setup_api_hash, width=40).pack(fill='x', pady=(0, 10))
+        ttk.Entry(form_inner, textvariable=self.setup_api_hash, style=entry_style).pack(fill='x', pady=(4, 14))
 
-        ttk.Label(form_frame, text="Telefonnummer (mit Ländercode, z.B. +49...):").pack(anchor='w')
+        ttk.Label(
+            form_inner,
+            text="Telefonnummer (inkl. Ländercode, z. B. +49…)",
+            style="Card.TLabel"
+        ).pack(anchor='w')
         self.setup_phone = tk.StringVar(value=str(telegram_cfg.get('phone', "")))
-        ttk.Entry(form_frame, textvariable=self.setup_phone, width=40).pack(fill='x', pady=(0, 10))
+        ttk.Entry(form_inner, textvariable=self.setup_phone, style=entry_style).pack(fill='x', pady=(4, 10))
 
         self.prompt_credentials = tk.BooleanVar(
             value=bool(telegram_cfg.get('prompt_credentials_on_start', False))
         )
         ttk.Checkbutton(
-            form_frame,
+            form_inner,
             text="API-Zugangsdaten bei jedem Start erneut abfragen",
+            style="Dark.TCheckbutton",
             variable=self.prompt_credentials
-        ).pack(anchor='w', pady=(5, 0))
+        ).pack(anchor='w', pady=(6, 0))
 
-        button_frame = ttk.Frame(self.window)
-        button_frame.pack(fill='x', padx=20, pady=20)
+        # --- Remaining steps list ---
+        steps_frame = ttk.Frame(container, style="Dark.TFrame")
+        steps_frame.pack(fill='x', pady=(30, 10))
 
-        ttk.Button(button_frame, text="Abbrechen", command=self.cancel_setup).pack(side='right', padx=(10, 0))
-        ttk.Button(button_frame, text="Konfiguration speichern", command=self.test_config).pack(side='right')
+        ttk.Label(steps_frame, text="Next up", style="Accent.TLabel").pack(anchor='w')
+        remaining_steps = [
+            "Schritt 3 – Telegram sendet dir einen Code. Gib ihn später im Login-Dialog ein.",
+            "Schritt 4 – Wähle deine Signal-Channels im Hauptfenster aus.",
+            "Schritt 5 – Aktiviere den Kopier-Modus, wenn alles bereit ist."
+        ]
+        for step_text in remaining_steps:
+            ttk.Label(
+                steps_frame,
+                text=f"• {step_text}",
+                style="Dark.TLabel",
+                wraplength=640,
+                justify='left'
+            ).pack(anchor='w', pady=2)
 
-    def test_config(self):
+        # --- Action buttons ---
+        button_row = tk.Frame(container, bg=background)
+        button_row.pack(fill='x', pady=(30, 0))
+
+        ttk.Button(button_row, text="Abbrechen", command=self.cancel_setup, style="Dark.TButton").pack(
+            side='right'
+        )
+
+        start_canvas = tk.Canvas(button_row, width=220, height=56, bg=background, highlightthickness=0,
+                                 cursor='hand2')
+        start_canvas.pack(side='right', padx=(0, 20))
+        start_canvas.configure(takefocus=1)
+
+        def draw_start_button(hover: bool = False) -> None:
+            start_canvas.delete('all')
+            width = int(start_canvas.winfo_width())
+            height = int(start_canvas.winfo_height())
+            if width <= 0 or height <= 0:
+                return
+            color_left = neon_blue
+            color_right = neon_green
+            if hover:
+                color_left = blend(neon_blue, '#FFFFFF', 0.25)
+                color_right = blend(neon_green, '#FFFFFF', 0.25)
+
+            for x in range(width):
+                ratio = 0 if width == 1 else x / (width - 1)
+                color = blend(color_left, color_right, ratio)
+                start_canvas.create_line(
+                    x,
+                    height / 2,
+                    x,
+                    height / 2,
+                    fill=color,
+                    width=height - 6,
+                    capstyle=tk.ROUND
+                )
+
+            start_canvas.create_text(
+                width / 2,
+                height / 2,
+                text="START BOT",
+                font=("Segoe UI Semibold", 13),
+                fill="#041225"
+            )
+
+        start_canvas.bind('<Configure>', lambda _event: draw_start_button())
+        draw_start_button()
+
+        start_canvas.bind('<Enter>', lambda _event: draw_start_button(True))
+        start_canvas.bind('<Leave>', lambda _event: draw_start_button(False))
+        start_canvas.bind('<Button-1>', lambda _event: self.start_bot())
+        start_canvas.bind('<Return>', lambda _event: self.start_bot())
+        start_canvas.bind('<space>', lambda _event: self.start_bot())
+        start_canvas.focus_set()
+        self.window.bind('<Return>', lambda _event: self.start_bot())
+
+    def start_bot(self):
         """Konfiguration testen/speichern"""
         api_id = self.setup_api_id.get().strip()
         api_hash = self.setup_api_hash.get().strip()
