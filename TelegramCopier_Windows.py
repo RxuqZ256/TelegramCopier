@@ -1500,6 +1500,8 @@ class AuthCodeDialog(simpledialog.Dialog):
 class TradingGUI:
     """Haupt-GUI für Multi-Chat-Trading"""
 
+    MT5_INVALID_LOGIN_MESSAGE = "MT5-Login ungültig. Bitte geben Sie eine numerische Kontonummer ein."
+
     def __init__(self, config: Optional[Dict] = None):
         self.root = tk.Tk()
         self.root.title("Multi-Chat Trading Bot (Windows)")
@@ -1627,6 +1629,9 @@ class TradingGUI:
             master=self.root,
             value=self._coerce_to_str(initial_mt5_cfg.get('path', mt5_defaults.get('path', "")))
         )
+        self.mt5_status_card: Optional[ttk.Frame] = None
+        self.mt5_status_message_var: Optional[tk.StringVar] = None
+        self.mt5_status_label: Optional[ttk.Label] = None
 
         # Bot-Instanz (setzt später Config/Setup)
         self.bot = MultiChatTradingBot(None, None, None)
@@ -1728,6 +1733,7 @@ class TradingGUI:
         self.style.configure('InfoBar.TLabel', background=surface_bg, foreground=subtle_text, font=('Segoe UI', 10))
         self.style.configure('FieldLabel.TLabel', background=base_bg, foreground=subtle_text, font=('Segoe UI', 10))
         self.style.configure('Warning.TLabel', background=base_bg, foreground=self.theme_colors['warning'], font=('Segoe UI Semibold', 11))
+        self.style.configure('Success.TLabel', background=base_bg, foreground=self.theme_colors['success'], font=('Segoe UI Semibold', 11))
         self.style.configure('MetricTitle.TLabel', background=surface_bg, foreground=subtle_text, font=('Segoe UI', 10))
         self.style.configure('MetricValue.TLabel', background=surface_bg, foreground=text_color, font=('Segoe UI Semibold', 16))
         self.style.configure('InfoBadge.TLabel', background=accent_light, foreground=accent_color, font=('Segoe UI Semibold', 9), padding=(10, 3))
@@ -2119,6 +2125,18 @@ class TradingGUI:
             state=button_state
         ).pack(side='left', padx=(12, 0))
 
+        self.mt5_status_card = ttk.Frame(mt5_frame, style='Card.TFrame', padding=(12, 10))
+        self.mt5_status_card.grid(row=6, column=0, columnspan=3, sticky='ew', pady=(12, 0))
+        self.mt5_status_message_var = tk.StringVar(value="Noch keine MT5-Zugangsdaten gespeichert.")
+        self.mt5_status_label = ttk.Label(
+            self.mt5_status_card,
+            textvariable=self.mt5_status_message_var,
+            style='Info.TLabel',
+            wraplength=760,
+            justify='left'
+        )
+        self.mt5_status_label.pack(anchor='w')
+
         if MT5_AVAILABLE:
             ttk.Label(
                 mt5_frame,
@@ -2126,7 +2144,7 @@ class TradingGUI:
                 style='Info.TLabel',
                 wraplength=760,
                 justify='left'
-            ).grid(row=6, column=0, columnspan=3, sticky='w', pady=(12, 0))
+            ).grid(row=7, column=0, columnspan=3, sticky='w', pady=(12, 0))
         else:
             ttk.Label(
                 mt5_frame,
@@ -2137,7 +2155,9 @@ class TradingGUI:
                 style='Warning.TLabel',
                 wraplength=760,
                 justify='left'
-            ).grid(row=6, column=0, columnspan=3, sticky='w', pady=(12, 0))
+            ).grid(row=7, column=0, columnspan=3, sticky='w', pady=(12, 0))
+
+        self._refresh_mt5_status_display()
 
         toolbar = ttk.Frame(settings_tab, style='Toolbar.TFrame', padding=(16, 12))
         toolbar.pack(fill='x', pady=(0, 18))
@@ -2739,6 +2759,8 @@ class TradingGUI:
             path_value.strip() or None
         )
 
+        self._refresh_mt5_status_display()
+
         signal_defaults = self.config_manager.default_config.get('signals', {})
         signals_cfg = self.current_config.setdefault('signals', {})
 
@@ -2760,6 +2782,26 @@ class TradingGUI:
         self.log_text.insert('end', f"{message}\n")
         self.log_text.see('end')
 
+    def _is_valid_mt5_login(self, login: Optional[object]) -> bool:
+        """Prüft, ob der übergebene MT5-Login numerisch ist."""
+        if login is None:
+            return False
+
+        try:
+            login_str = str(login).strip()
+        except Exception:
+            return False
+
+        if not login_str:
+            return False
+
+        try:
+            int(login_str)
+        except (TypeError, ValueError):
+            return False
+
+        return True
+
     def _collect_mt5_form_data(self):
         """Liest die MT5-Formularwerte aus."""
         try:
@@ -2772,9 +2814,57 @@ class TradingGUI:
 
         return login.strip(), password, server.strip(), path.strip()
 
+    def _refresh_mt5_status_display(self, message: Optional[str] = None, level: Optional[str] = None):
+        """Aktualisiert die Statusanzeige für die MT5-Zugangsdaten."""
+        if not self.mt5_status_message_var or not self.mt5_status_label:
+            return
+
+        style_map = {
+            'info': 'Info.TLabel',
+            'success': 'Success.TLabel',
+            'warning': 'Warning.TLabel',
+            'error': 'Warning.TLabel'
+        }
+
+        if not MT5_AVAILABLE:
+            if not message:
+                message = "MetaTrader5-Python-Modul ist nicht verfügbar."
+            level = level or 'warning'
+        elif message is None:
+            login, password, server, _ = self._collect_mt5_form_data()
+            login_present = bool(login)
+            password_present = bool(password)
+            server_present = bool(server)
+            login_valid = self._is_valid_mt5_login(login)
+            invalid_login = login_present and not login_valid
+
+            if not (login_present or password_present or server_present):
+                message = "Noch keine MT5-Zugangsdaten gespeichert."
+                level = 'info'
+            elif invalid_login:
+                message = self.MT5_INVALID_LOGIN_MESSAGE
+                level = 'warning'
+            elif not (login_present and password_present and server_present):
+                message = "MT5-Zugangsdaten unvollständig. Bitte Login, Passwort und Server angeben."
+                level = 'warning'
+            else:
+                message = "MT5-Zugangsdaten geladen."
+                level = 'success'
+
+        level = level or 'info'
+        style = style_map.get(level, 'Info.TLabel')
+        self.mt5_status_label.configure(style=style)
+        self.mt5_status_message_var.set(message or "")
+
     def save_mt5_credentials(self, silent: bool = False) -> bool:
         """Speichert MT5-Zugangsdaten in der Konfiguration."""
         login, password, server, path = self._collect_mt5_form_data()
+
+        if login and not self._is_valid_mt5_login(login):
+            warning_message = self.MT5_INVALID_LOGIN_MESSAGE
+            self.log_message(warning_message)
+            self._refresh_mt5_status_display(warning_message, level='warning')
+            return False
 
         mt5_cfg = self.current_config.setdefault('mt5', {})
         mt5_cfg['login'] = login
@@ -2792,9 +2882,12 @@ class TradingGUI:
         try:
             self.config_manager.save_config(self.current_config)
         except Exception as exc:
-            self.log_message(f"Fehler beim Speichern der MT5-Daten: {exc}")
+            error_message = f"Fehler beim Speichern der MT5-Daten: {exc}"
+            self.log_message(error_message)
+            self._refresh_mt5_status_display(error_message, level='warning')
             return False
 
+        self._refresh_mt5_status_display()
         if not silent:
             self.log_message("MT5-Zugangsdaten aktualisiert.")
         return True
@@ -2804,6 +2897,7 @@ class TradingGUI:
         if not MT5_AVAILABLE:
             message = "MetaTrader5-Python-Modul ist nicht verfügbar. Installieren Sie es, um den LIVE-Modus zu nutzen."
             self.log_message(message)
+            self._refresh_mt5_status_display(message, level='warning')
             try:
                 messagebox.showwarning("MT5 nicht verfügbar", message)
             except Exception:
@@ -2811,11 +2905,24 @@ class TradingGUI:
             return
 
         login, password, server, path = self._collect_mt5_form_data()
-        self.save_mt5_credentials(silent=True)
+
+        if login and not self._is_valid_mt5_login(login):
+            warning_message = self.MT5_INVALID_LOGIN_MESSAGE
+            self.log_message(warning_message)
+            self._refresh_mt5_status_display(warning_message, level='warning')
+            try:
+                messagebox.showwarning("Ungültiger MT5-Login", warning_message)
+            except Exception:
+                pass
+            return
+
+        if not self.save_mt5_credentials(silent=True):
+            return
 
         if not login or not password or not server:
             message = "Bitte geben Sie Login, Passwort und Server an, bevor Sie die Verbindung testen."
             self.log_message(message)
+            self._refresh_mt5_status_display(message, level='warning')
             try:
                 messagebox.showwarning("Angaben unvollständig", message)
             except Exception:
@@ -2827,6 +2934,7 @@ class TradingGUI:
         if success:
             message = "MT5-Verbindung erfolgreich aufgebaut."
             self.log_message(message)
+            self._refresh_mt5_status_display(message, level='success')
             try:
                 messagebox.showinfo("Verbindung erfolgreich", message)
             except Exception:
@@ -2834,6 +2942,7 @@ class TradingGUI:
         else:
             message = self.bot.get_last_mt5_error() or "MT5-Verbindung konnte nicht hergestellt werden."
             self.log_message(message)
+            self._refresh_mt5_status_display(message, level='warning')
             try:
                 messagebox.showerror("Verbindung fehlgeschlagen", message)
             except Exception:
@@ -2872,8 +2981,8 @@ class TradingGUI:
             self.log_message("Der ausgewählte Pfad konnte nicht übernommen werden.")
             return
 
-        self.save_mt5_credentials(silent=True)
-        self.log_message("MT5-Terminalpfad aktualisiert.")
+        if self.save_mt5_credentials(silent=True):
+            self.log_message("MT5-Terminalpfad aktualisiert.")
 
     def _add_trading_var_trace(self, key: str, var: tk.Variable, caster):
         """Trace für Trading-Variablen registrieren."""
