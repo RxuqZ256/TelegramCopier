@@ -5,8 +5,6 @@
 
 import asyncio
 import math
-import os
-import sys
 import re
 import json
 import queue
@@ -17,20 +15,56 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Optional, Dict, List, Awaitable
 
-# >>> numpy/mt5 guard
+# >>> numpy/mt5 guard + onboarding bootstrap
+import os, sys
+
+# 1) NumPy-Guard (MT5 braucht NumPy 1.x)
 try:
     import numpy as _np
-    _major = int(_np.__version__.split(".")[0])
-    if _major >= 2:
+    if int(_np.__version__.split(".", 1)[0]) >= 2:
         raise RuntimeError(
-            f"NumPy {_np.__version__} erkannt. MetaTrader5 benoetigt NumPy 1.x. "
-            "Bitte starte 'scripts\\fix_mt5_numpy.bat' oder installiere: "
-            "pip uninstall -y numpy && pip install numpy==1.26.4"
+            f"NumPy {_np.__version__} erkannt. MetaTrader5 benötigt NumPy 1.x. "
+            "Bitte 'scripts\\fix_mt5_numpy.bat' ausführen."
         )
+except ModuleNotFoundError:
+    print("[startup] No module named 'numpy' (verwende scripts\\fix_mt5_numpy.bat)")
 except Exception as _e:
     print("[startup]", _e)
-    raise
-# <<< numpy/mt5 guard
+
+
+def run_onboarding_if_needed():
+    is_windows = (os.name == "nt")
+    force = ("--setup" in sys.argv)
+    env_ready = bool(os.getenv("TG_API_ID") and os.getenv("TG_API_HASH") and os.getenv("TG_TARGET"))
+    has_env_file = os.path.exists(".env")
+
+    if not is_windows:
+        print("[onboarding] non-Windows -> skip")
+        return
+
+    if not force and env_ready and has_env_file:
+        print("[onboarding] env already set + .env present -> skip")
+        return
+
+    try:
+        import tkinter as tk
+        from ui.onboarding import run_onboarding
+    except Exception as e:
+        print(f"[onboarding] GUI not available -> {e}. Installiere Standard-Python mit Tcl/Tk.")
+        return
+
+    root = tk.Tk(); root.withdraw()
+    cfg = run_onboarding(root)
+    if not cfg:
+        print("[onboarding] cancelled by user"); sys.exit(0)
+
+    os.environ["TG_API_ID"] = str(cfg["api_id"])
+    os.environ["TG_API_HASH"] = cfg["api_hash"]
+    os.environ["TG_TARGET"] = cfg["tg_target"]
+    if cfg.get("forward_to"):
+        os.environ["FORWARD_TO"] = cfg["forward_to"]
+    print("[onboarding] configuration loaded")
+# <<< numpy/mt5 guard + onboarding bootstrap
 
 # ---- optionale Abhängigkeit: MetaTrader5 (nur für Windows verfügbar) ----
 try:
@@ -47,39 +81,6 @@ from telethon.errors import (
 )
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, font as tkfont, filedialog
-
-# >>> ONBOARDING INTEGRATION (auto-added)
-import os, sys
-
-
-def run_onboarding_if_needed():
-    # Nur unter Windows und nur wenn Variablen fehlen
-    if os.name != "nt":
-        print("[onboarding] non-Windows -> skip")
-        return
-    if os.getenv("TG_API_ID") and os.getenv("TG_API_HASH") and os.getenv("TG_TARGET"):
-        print("[onboarding] env already set -> skip")
-        return
-    try:
-        import tkinter as tk
-        from ui.onboarding import run_onboarding
-    except Exception as e:
-        print(f"[onboarding] GUI not available -> skip ({e})")
-        return
-
-    root = tk.Tk(); root.withdraw()
-    cfg = run_onboarding(root)
-    if not cfg:
-        print("[onboarding] cancelled by user")
-        sys.exit(0)
-
-    os.environ["TG_API_ID"]   = str(cfg["api_id"])
-    os.environ["TG_API_HASH"] = cfg["api_hash"]
-    os.environ["TG_TARGET"]   = cfg["tg_target"]
-    if cfg.get("forward_to"):
-        os.environ["FORWARD_TO"] = cfg["forward_to"]
-    print("[onboarding] configuration loaded")
-# <<< ONBOARDING INTEGRATION
 
 # ==================== DATENSTRUKTUREN ====================
 

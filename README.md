@@ -9,6 +9,11 @@ Er kopiert Signale von Telegram zu MT5.
    - installiert Anforderungen,
    - startet `TelegramCopier_Windows.py` (Onboarding-Popup erscheint).
 
+### Windows Quickstart
+- **Erststart / Setup:** `scripts\fix_mt5_numpy.bat`
+- **Normaler Start:** `scripts\start_windows.bat`
+- **Setup erzwingen (Onboarding-Popup erneut):** `scripts\force_setup.bat`
+
 ## Windows-EXE erstellen
 
 Mit dem Skript `build_windows_exe.bat` kannst du unter Windows eine ausführbare Datei erstellen. Du benötigst dafür eine 64-Bit-Python-Installation (empfohlen wird Python 3.11), weil PyInstaller die Abhängigkeiten direkt aus der installierten Umgebung einsammelt.

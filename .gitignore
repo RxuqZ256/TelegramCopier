@@ -209,3 +209,12 @@ __marimo__/
 # Project specific
 chat_config.json
 trading_config.json
+tg_session*
+*.session
+*.session-journal
+*.db
+.venv/
+dist/
+build/
+__pycache__/
+*.pyc
