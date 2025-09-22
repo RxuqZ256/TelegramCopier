@@ -16,7 +16,7 @@ from enum import Enum
 from typing import Optional, Dict, List, Awaitable
 
 # >>> numpy/mt5 guard + onboarding bootstrap
-import os, sys
+import os, sys, pathlib, traceback
 
 # 1) NumPy-Guard (MT5 braucht NumPy 1.x)
 try:
@@ -30,46 +30,71 @@ except ModuleNotFoundError:
     print("[startup] No module named 'numpy' (verwende scripts\\fix_mt5_numpy.bat)")
 except Exception as _e:
     print("[startup]", _e)
+# >>> Robust Onboarding (GUI first, console fallback)
+def console_onboarding():
+    print("\n=== Telegram Console Setup ===")
+    try:
+        api_id = input("API ID (nur Ziffern): ").strip()
+        api_hash = input("API Hash: ").strip()
+        tg_target = input("Source chat (@name oder -100...): ").strip()
+        forward_to = input("Forward to (optional): ").strip()
+    except KeyboardInterrupt:
+        print("\n[onboarding] cancelled"); sys.exit(0)
+
+    # .env schreiben
+    with open(".env", "w", encoding="utf-8") as f:
+        f.write(f"TG_API_ID={api_id}\n")
+        f.write(f"TG_API_HASH={api_hash}\n")
+        f.write(f"TG_TARGET={tg_target}\n")
+        if forward_to:
+            f.write(f"FORWARD_TO={forward_to}\n")
+
+    os.environ["TG_API_ID"]   = str(api_id)
+    os.environ["TG_API_HASH"] = api_hash
+    os.environ["TG_TARGET"]   = tg_target
+    if forward_to:
+        os.environ["FORWARD_TO"] = forward_to
+    print("[onboarding] configuration saved via console")
 
 
 def run_onboarding_if_needed():
-    is_windows = (os.name == "nt")
+    """Zeigt Onboarding immer, wenn --setup genutzt wird oder TG_* fehlen/.env fehlt.
+       Versucht GUI; bei Fehlern -> Console-Fallback."""
     force = ("--setup" in sys.argv)
     env_ready = bool(os.getenv("TG_API_ID") and os.getenv("TG_API_HASH") and os.getenv("TG_TARGET"))
-    has_env_file = os.path.exists(".env")
+    has_env = os.path.exists(".env")
 
-    if not is_windows:
+    if os.name != "nt":
         print("[onboarding] non-Windows -> skip")
         return
 
-    if not force and env_ready and has_env_file:
+    if not force and env_ready and has_env:
         print("[onboarding] env already set + .env present -> skip")
         return
 
+    # GUI versuchen
     try:
         import tkinter as tk
         from ui.onboarding import run_onboarding
+        root = tk.Tk(); root.withdraw()
+        cfg = run_onboarding(root)
+        if not cfg:
+            print("[onboarding] cancelled by user"); sys.exit(0)
+        os.environ["TG_API_ID"]   = str(cfg["api_id"])
+        os.environ["TG_API_HASH"] = cfg["api_hash"]
+        os.environ["TG_TARGET"]   = cfg["tg_target"]
+        if cfg.get("forward_to"):
+            os.environ["FORWARD_TO"] = cfg["forward_to"]
+        print("[onboarding] configuration loaded (GUI)")
     except Exception as e:
-        print(f"[onboarding] GUI not available -> {e}. Installiere Standard-Python mit Tcl/Tk.")
-        return
-
-    root = tk.Tk(); root.withdraw()
-    cfg = run_onboarding(root)
-    if not cfg:
-        print("[onboarding] cancelled by user"); sys.exit(0)
-
-    os.environ["TG_API_ID"] = str(cfg["api_id"])
-    os.environ["TG_API_HASH"] = cfg["api_hash"]
-    os.environ["TG_TARGET"] = cfg["tg_target"]
-    if cfg.get("forward_to"):
-        os.environ["FORWARD_TO"] = cfg["forward_to"]
-    print("[onboarding] configuration loaded")
+        # Fallback in die Konsole (kein Tk o.ä.)
+        print(f"[onboarding] GUI not available -> {e}\nFalling back to console setup…")
+        console_onboarding()
 # <<< numpy/mt5 guard + onboarding bootstrap
 
 # >>> UI bootstrap
 def _start_ui():
     from ui.app import run_app
-
     session_info = {"tg_target": os.getenv("TG_TARGET", ""), "user": "local"}
     run_app(session=session_info, initial_page="settings")
 # <<< UI bootstrap
@@ -5188,15 +5213,19 @@ def prompt_for_api_credentials(config_manager: ConfigManager, config: Optional[D
 
 # ==================== MAIN ====================
 
-def main():
-    """Hauptfunktion mit Setup-Assistent"""
-    run_onboarding_if_needed()
-    if not show_startup_warning():
-        print("Programm abgebrochen.")
-        return
 
-    _start_ui()
+def safe_main():
+    try:
+        run_onboarding_if_needed()
+        _start_ui()
+    except Exception as e:
+        pathlib.Path("logs").mkdir(exist_ok=True)
+        with open("logs/last_startup_error.log", "w", encoding="utf-8") as f:
+            traceback.print_exc(file=f)
+        print("\n[FATAL] Startfehler:", e)
+        print("Details: logs\\last_startup_error.log")
+        input("Weiter mit Taste…")
 
 
 if __name__ == "__main__":
-    main()
+    safe_main()

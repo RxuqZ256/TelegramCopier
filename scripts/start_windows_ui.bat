@@ -1,8 +1,7 @@
-@echo off
+@echo on
 setlocal
 cd /d %~dp0\..
 if not exist .venv ( python -m venv .venv )
-.\.venv\Scripts\python.exe -m pip install --upgrade pip >nul 2>&1
-rem Onboarding erzwingen, danach normale App starten
-.\.venv\Scripts\python.exe TelegramCopier_Windows.py --setup
+.\.venv\Scripts\python.exe -u -X faulthandler TelegramCopier_Windows.py --setup
+echo ExitCode=%errorlevel%
 pause

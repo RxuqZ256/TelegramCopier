@@ -1,13 +1,13 @@
-@echo off
+@echo on
 setlocal
 cd /d %~dp0\..
-echo === DEBUG ENV ===
-where python
-if not exist .venv ( echo (creating venv) & python -m venv .venv )
+if not exist .venv ( python -m venv .venv )
 .\.venv\Scripts\python.exe -V
-.\.venv\Scripts\python.exe -c "import sys,platform;print('platform', platform.platform());import tkinter as tk;print('tk OK')"
-.\.venv\Scripts\python.exe -c "import numpy,MetaTrader5 as mt5;print('numpy',numpy.__version__);print('mt5 import OK')"
-echo === RUN APP ===
-.\.venv\Scripts\python.exe TelegramCopier_Windows.py --setup --ui
-echo.
+.\.venv\Scripts\python.exe -c "import tkinter as tk; print('tkinter OK')"
+.\.venv\Scripts\python.exe -c "import numpy; print('numpy', numpy.__version__)"
+.\.venv\Scripts\python.exe -u -X faulthandler TelegramCopier_Windows.py --setup
+if exist logs\last_startup_error.log (
+  echo --- logs\last_startup_error.log ---
+  type logs\last_startup_error.log
+)
 pause
