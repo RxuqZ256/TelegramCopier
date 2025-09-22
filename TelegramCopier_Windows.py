@@ -5057,16 +5057,8 @@ def check_first_run() -> bool:
     config = config_manager.load_config()
     telegram_cfg = config.get('telegram', {})
 
-    if telegram_cfg.get('prompt_credentials_on_start'):
-        return True
-
-    if not all([
-        telegram_cfg.get('api_id'),
-        telegram_cfg.get('api_hash'),
-        telegram_cfg.get('phone')
-    ]):
-        return True
-    return False
+    required_fields = ('api_id', 'api_hash', 'phone')
+    return not all(telegram_cfg.get(field) for field in required_fields)
 
 
 def show_startup_warning() -> bool:
@@ -5129,39 +5121,37 @@ def main():
             required_fields = ('api_id', 'api_hash', 'phone')
             return all(telegram_cfg.get(field) for field in required_fields)
 
+        def _launch_setup_wizard() -> bool:
+            root = tk.Tk()
+            root.withdraw()
+            setup = SetupAssistant(root)
+            setup.show_setup_dialog()
+            root.mainloop()
+            root.destroy()
+
+            if not setup.config_saved:
+                print("Setup abgebrochen. Anwendung wird beendet.")
+                return False
+
+            return True
+
         setup_completed = False
 
         if check_first_run():
-            if not _has_required_credentials(cfg):
-                root = tk.Tk()
-                root.withdraw()
-                setup = SetupAssistant(root)
-                setup.show_setup_dialog()
-                root.mainloop()
-                root.destroy()
+            if not _launch_setup_wizard():
+                return
 
-                if not setup.config_saved:
-                    print("Setup abgebrochen. Anwendung wird beendet.")
-                    return
-
-                setup_completed = True
-                cfg = config_manager.load_config()
+            setup_completed = True
+            cfg = config_manager.load_config()
 
         telegram_cfg = cfg.get('telegram', {})
         missing_credentials = not _has_required_credentials(cfg)
 
-        should_prompt = False
-        if not setup_completed:
-            if telegram_cfg.get('prompt_credentials_on_start'):
-                should_prompt = True
-            if missing_credentials:
-                should_prompt = True
-
-        if should_prompt:
-            if not prompt_for_api_credentials(config_manager, cfg):
-                print("Keine API-Zugangsdaten eingegeben. Anwendung wird beendet.")
+        if not setup_completed and (telegram_cfg.get('prompt_credentials_on_start') or missing_credentials):
+            if not _launch_setup_wizard():
                 return
 
+            setup_completed = True
             cfg = config_manager.load_config()
             telegram_cfg = cfg.get('telegram', {})
             missing_credentials = not _has_required_credentials(cfg)
