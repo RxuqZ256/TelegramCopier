@@ -17,7 +17,7 @@ from typing import Optional, Dict, List, Awaitable
 
 # ---- optionale Abhängigkeit: MetaTrader5 (nur für Windows verfügbar) ----
 try:
-    import MetaTrader5 as mt5  # noqa: F401
+    import MetaTrader5 as mt5
     MT5_AVAILABLE = True
 except Exception:
     MT5_AVAILABLE = False
@@ -29,7 +29,7 @@ from telethon.errors import (
     SessionPasswordNeededError
 )
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog, font as tkfont
+from tkinter import ttk, messagebox, simpledialog, font as tkfont, filedialog
 
 # ==================== DATENSTRUKTUREN ====================
 
@@ -274,7 +274,7 @@ class TradeTracker:
 # ==================== SIGNAL PROCESSOR ====================
 
 class SignalProcessor:
-    """Vereinfachter Signal-Prozessor (Demo)"""
+    """Vereinfachter Signal-Prozessor"""
 
     def __init__(self):
         self.symbol_mapping = {
@@ -439,7 +439,6 @@ class MultiChatTradingBot:
 
         # Status
         self.is_running = False
-        self.demo_mode = True  # Immer mit Demo starten!
         self.pending_trade_updates: Dict[int, Dict] = {}
         self.execution_mode = ExecutionMode.INSTANT
 
@@ -462,6 +461,7 @@ class MultiChatTradingBot:
         self._mt5_initialized: bool = False
         self._mt5_login_ok: bool = False
         self._last_mt5_error: Optional[str] = None
+        self._mt5_account_info: Optional[Dict[str, str]] = None
 
         # Zugangsdaten anwenden (falls vorhanden)
         self.update_credentials(api_id, api_hash, phone, session_name=session_name)
@@ -866,7 +866,7 @@ class MultiChatTradingBot:
         return bool(result)
 
     async def execute_signal(self, signal: Dict, chat_source: ChatSource, original_message: str):
-        """Signal ausführen (Demo oder Live)"""
+        """Signal ausführen und an MetaTrader 5 übergeben."""
         try:
             execution_mode = self._determine_execution_mode(signal)
             entry_price_raw = signal.get('entry_price')
@@ -926,8 +926,7 @@ class MultiChatTradingBot:
                 )
                 self.send_message('TRADE_EXECUTED', {
                     **pending_result,
-                    'source': chat_source.chat_name,
-                    'demo': True
+                    'source': chat_source.chat_name
                 })
                 return pending_result
 
@@ -957,30 +956,6 @@ class MultiChatTradingBot:
                     )
                     return None
 
-            if self.demo_mode:
-                default_price = 1.0850 if 'EUR' in signal['symbol'] else 2660.00
-                price = entry_price if entry_price is not None else default_price
-                demo_result = {
-                    'ticket': f"DEMO_{int(datetime.now().timestamp())}",
-                    'price': price,
-                    'lot_size': lot_size,
-                    'status': 'executed',
-                    'profit_loss': 0.0,
-                    **base_trade_info
-                }
-
-                # Trade zu Tracker hinzufügen
-                self.trade_tracker.add_trade(demo_result, chat_source, original_message)
-
-                self.log(f"DEMO-Trade ausgeführt: {signal['action']} {signal['symbol']} von {chat_source.chat_name}")
-
-                # GUI benachrichtigen
-                self.send_message('TRADE_EXECUTED', {
-                    **demo_result,
-                    'source': chat_source.chat_name,
-                    'demo': True
-                })
-                return demo_result
             if not self.ensure_mt5_session():
                 return None
 
@@ -1056,6 +1031,13 @@ class MultiChatTradingBot:
             }
 
             try:
+                self.log(
+                    (
+                        f"Sende Order an MT5: {direction} {symbol} "
+                        f"(Volumen {float(lot_size):.2f}, Preis {price:.5f})."
+                    ),
+                    "INFO"
+                )
                 result = mt5.order_send(request)
             except Exception as exc:
                 self.log(f"MT5-Order konnte nicht gesendet werden: {exc}", "ERROR")
@@ -1103,8 +1085,7 @@ class MultiChatTradingBot:
 
             self.send_message('TRADE_EXECUTED', {
                 **live_result,
-                'source': chat_source.chat_name,
-                'demo': False
+                'source': chat_source.chat_name
             })
             return live_result
 
@@ -1218,14 +1199,6 @@ class MultiChatTradingBot:
                 return str(error[0])
         return str(error)
 
-    def _enforce_demo_mode(self, reason: str):
-        """Erzwingt den Demo-Modus und informiert die GUI."""
-        if reason:
-            self.log(reason, "ERROR")
-        if not self.demo_mode:
-            self.demo_mode = True
-            self.send_message('DEMO_MODE_ENFORCED', {'message': reason})
-
     def update_mt5_credentials(
         self,
         login: Optional[object],
@@ -1241,6 +1214,7 @@ class MultiChatTradingBot:
             self.mt5_path = None
             self._mt5_initialized = False
             self._mt5_login_ok = False
+            self._mt5_account_info = None
             self._last_mt5_error = "MetaTrader5 ist nicht installiert oder verfügbar."
             return
 
@@ -1253,6 +1227,7 @@ class MultiChatTradingBot:
         self.mt5_server = server or None
         self.mt5_path = path or None
         self._mt5_login_ok = False
+        self._mt5_account_info = None
         self._last_mt5_error = None
 
         if self._mt5_initialized:
@@ -1261,17 +1236,17 @@ class MultiChatTradingBot:
             except Exception:
                 pass
             self._mt5_initialized = False
+            self._mt5_account_info = None
 
-    def ensure_mt5_session(self, enforce_demo_on_fail: bool = True) -> bool:
+    def ensure_mt5_session(self) -> bool:
         """Stellt sicher, dass eine aktive MT5-Session verfügbar ist."""
         self._last_mt5_error = None
 
         def handle_failure(message: str) -> bool:
+            self._mt5_login_ok = False
+            self._mt5_account_info = None
             self._last_mt5_error = message
-            if enforce_demo_on_fail:
-                self._enforce_demo_mode(message)
-            else:
-                self.log(message, "ERROR")
+            self.log(message, "ERROR")
             return False
 
         if not MT5_AVAILABLE:
@@ -1279,6 +1254,9 @@ class MultiChatTradingBot:
 
         if not self.mt5_login or not self.mt5_password or not self.mt5_server:
             return handle_failure("MT5-Zugangsdaten unvollständig. Bitte prüfen Sie Login, Passwort und Server.")
+
+        initialized_this_call = False
+        logged_in_this_call = False
 
         if self._mt5_initialized:
             try:
@@ -1302,6 +1280,7 @@ class MultiChatTradingBot:
                 message = f"MT5 konnte nicht initialisiert werden: {exc}"
                 return handle_failure(message)
             self._mt5_initialized = True
+            initialized_this_call = True
 
         try:
             account_info = mt5.account_info()
@@ -1321,16 +1300,40 @@ class MultiChatTradingBot:
                 account_info = mt5.account_info()
             except Exception:
                 account_info = None
+            else:
+                logged_in_this_call = True
 
         if not account_info or account_info.login != self.mt5_login:
             return handle_failure("MT5-Account konnte nicht bestätigt werden.")
 
+        if initialized_this_call:
+            self.log("MetaTrader 5 Terminal initialisiert.", "INFO")
+        if logged_in_this_call:
+            self.log(f"MT5-Login erfolgreich für Konto {self.mt5_login}.", "INFO")
+
+        summary = {
+            'login': str(getattr(account_info, 'login', self.mt5_login)),
+            'name': str(getattr(account_info, 'name', '') or ''),
+            'server': str(getattr(account_info, 'server', self.mt5_server or '') or ''),
+            'currency': str(getattr(account_info, 'currency', '') or ''),
+            'balance': f"{getattr(account_info, 'balance', 0.0):.2f}",
+            'equity': f"{getattr(account_info, 'equity', 0.0):.2f}",
+            'leverage': str(getattr(account_info, 'leverage', '') or '')
+        }
+
+        self._mt5_account_info = summary
         self._mt5_login_ok = True
         return True
 
     def get_last_mt5_error(self) -> Optional[str]:
         """Gibt die letzte MT5-Fehlermeldung zurück."""
         return self._last_mt5_error
+
+    def get_mt5_account_summary(self) -> Optional[Dict[str, str]]:
+        """Liefert zusammengefasste Informationen zur aktuellen MT5-Session."""
+        if not self._mt5_account_info:
+            return None
+        return dict(self._mt5_account_info)
 
 
 # ==================== KONFIGURATION ====================
@@ -1349,7 +1352,6 @@ class ConfigManager:
                 "prompt_credentials_on_start": False
             },
             "trading": {
-                "demo_mode": True,
                 "execution_mode": ExecutionMode.INSTANT.value,
                 "default_lot_size": 0.01,
                 "max_spread_pips": 3.0,
@@ -1609,6 +1611,25 @@ class TradingGUI:
             'auto_tp_sl': 'Automatische SL/TP-Erkennung'
         }
 
+        mt5_defaults = self.config_manager.default_config.get('mt5', {})
+        initial_mt5_cfg = self.current_config.get('mt5', {})
+        self.mt5_login_var = tk.StringVar(
+            master=self.root,
+            value=self._coerce_to_str(initial_mt5_cfg.get('login', mt5_defaults.get('login', "")))
+        )
+        self.mt5_password_var = tk.StringVar(
+            master=self.root,
+            value=self._coerce_to_str(initial_mt5_cfg.get('password', mt5_defaults.get('password', "")))
+        )
+        self.mt5_server_var = tk.StringVar(
+            master=self.root,
+            value=self._coerce_to_str(initial_mt5_cfg.get('server', mt5_defaults.get('server', "")))
+        )
+        self.mt5_path_var = tk.StringVar(
+            master=self.root,
+            value=self._coerce_to_str(initial_mt5_cfg.get('path', mt5_defaults.get('path', "")))
+        )
+
         # Bot-Instanz (setzt später Config/Setup)
         self.bot = MultiChatTradingBot(None, None, None)
         self.bot_starting = False
@@ -1621,6 +1642,8 @@ class TradingGUI:
 
         # Buttons (werden in create_widgets gesetzt)
         self.start_button: Optional[ttk.Button] = None
+        self.mt5_summary_label: Optional[ttk.Label] = None
+        self.mt5_hint_label: Optional[ttk.Label] = None
 
         # GUI-Komponenten
         self.create_widgets()
@@ -1782,6 +1805,7 @@ class TradingGUI:
 
         self.create_chat_overview_tab()
         self.create_bot_settings_tab()
+        self.create_trading_settings_tab()
         self.create_statistics_tab()
 
         # Status Bar
@@ -1901,31 +1925,20 @@ class TradingGUI:
             )
         ).pack(side='right')
 
-    def create_bot_settings_tab(self):
-        """Tab für Bot-Einstellungen und Status"""
+    def create_trading_settings_tab(self):
+        """Tab für Handelsparameter und Log"""
         settings_tab = ttk.Frame(self.notebook, padding=(24, 24, 24, 20), style='Main.TFrame')
-        self.notebook.add(settings_tab, text="Bot Einstellungen")
+        self.notebook.add(settings_tab, text="Trading Einstellungen")
 
         header = ttk.Frame(settings_tab, style='Main.TFrame')
         header.pack(fill='x')
-        ttk.Label(header, text="Bot-Status & Einstellungen", style='SectionTitle.TLabel').pack(side='left')
-        self.trade_status_label = ttk.Label(header, text="Demo-Modus aktiv", style='Info.TLabel')
-        self.trade_status_label.pack(side='right')
+        ttk.Label(header, text="Trading-Konfiguration", style='SectionTitle.TLabel').pack(side='left')
 
         settings_frame = ttk.Frame(settings_tab, style='Card.TFrame', padding=(20, 18))
         settings_frame.pack(fill='x', pady=(20, 16))
-        settings_frame.columnconfigure((0, 1, 2), weight=1)
+        settings_frame.columnconfigure((0, 1), weight=1)
 
-        self.demo_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            settings_frame,
-            text="Demo-Modus (Empfohlen)",
-            variable=self.demo_var,
-            command=self.toggle_demo_mode,
-            style='Switch.TCheckbutton'
-        ).grid(row=0, column=0, sticky='w')
-
-        ttk.Label(settings_frame, text="Ausführungsmodus:", style='FieldLabel.TLabel').grid(row=0, column=1, sticky='w')
+        ttk.Label(settings_frame, text="Ausführungsmodus:", style='FieldLabel.TLabel').grid(row=0, column=0, sticky='w')
         default_execution_label = self.execution_mode_labels.get(ExecutionMode.INSTANT, "Sofortausführung")
         self.execution_mode_var = tk.StringVar(value=default_execution_label)
         self.execution_mode_combobox = ttk.Combobox(
@@ -1934,7 +1947,7 @@ class TradingGUI:
             values=list(self.execution_mode_labels.values()),
             state='readonly'
         )
-        self.execution_mode_combobox.grid(row=0, column=2, sticky='ew', padx=(8, 0))
+        self.execution_mode_combobox.grid(row=0, column=1, sticky='ew', padx=(8, 0))
         self.execution_mode_combobox.bind('<<ComboboxSelected>>', self.on_execution_mode_change)
 
         warning_label = ttk.Label(
@@ -1942,7 +1955,7 @@ class TradingGUI:
             text="⚠ WARNUNG: Automatisiertes Trading birgt hohe Verlustrisiken!",
             style='Warning.TLabel'
         )
-        warning_label.grid(row=1, column=0, columnspan=3, sticky='w', pady=(14, 0))
+        warning_label.grid(row=1, column=0, columnspan=2, sticky='w', pady=(14, 0))
 
         signal_settings_frame = ttk.Frame(settings_tab, style='Card.TFrame', padding=(20, 18))
         signal_settings_frame.pack(fill='x', pady=(0, 18))
@@ -2071,6 +2084,149 @@ class TradingGUI:
         log_scroll = ttk.Scrollbar(log_frame, orient='vertical', command=self.log_text.yview)
         log_scroll.pack(side='right', fill='y')
         self.log_text.configure(yscrollcommand=log_scroll.set, padx=14, pady=12, spacing3=6)
+
+    def create_bot_settings_tab(self):
+        """Tab für MT5-Anbindung und Zugangsdaten."""
+        mt5_tab = ttk.Frame(self.notebook, padding=(24, 24, 24, 20), style='Main.TFrame')
+        self.notebook.add(mt5_tab, text="Bot Einstellungen")
+
+        header = ttk.Frame(mt5_tab, style='Main.TFrame')
+        header.pack(fill='x')
+        ttk.Label(header, text="MetaTrader 5 Anbindung", style='SectionTitle.TLabel').pack(side='left')
+        self.mt5_status_label = ttk.Label(
+            header,
+            text="",
+            style='Info.TLabel'
+        )
+        self.mt5_status_label.pack(side='right')
+
+        intro_card = ttk.Frame(mt5_tab, style='Card.TFrame', padding=(20, 18))
+        intro_card.pack(fill='x', pady=(20, 16))
+        ttk.Label(
+            intro_card,
+            text=(
+                "Hinterlegen Sie hier die Zugangsdaten Ihres MetaTrader-5-Kontos, damit der Bot Trades "
+                "direkt im Terminal platzieren kann."
+            ),
+            style='Info.TLabel',
+            wraplength=780,
+            justify='left'
+        ).pack(anchor='w')
+
+        connection_card = ttk.Frame(mt5_tab, style='Card.TFrame', padding=(20, 18))
+        connection_card.pack(fill='x', pady=(0, 18))
+        connection_card.columnconfigure(1, weight=1)
+
+        entry_state = 'normal' if MT5_AVAILABLE else 'disabled'
+        button_state = 'normal' if MT5_AVAILABLE else 'disabled'
+
+        ttk.Label(connection_card, text="Login (Kontonummer):", style='FieldLabel.TLabel').grid(
+            row=0, column=0, sticky='w'
+        )
+        ttk.Entry(
+            connection_card,
+            textvariable=self.mt5_login_var,
+            state=entry_state
+        ).grid(row=0, column=1, sticky='ew', padx=(10, 0), pady=(0, 6))
+
+        ttk.Label(connection_card, text="Passwort:", style='FieldLabel.TLabel').grid(
+            row=1, column=0, sticky='w'
+        )
+        ttk.Entry(
+            connection_card,
+            textvariable=self.mt5_password_var,
+            show='•',
+            state=entry_state
+        ).grid(row=1, column=1, sticky='ew', padx=(10, 0), pady=(0, 6))
+
+        ttk.Label(connection_card, text="Server:", style='FieldLabel.TLabel').grid(
+            row=2, column=0, sticky='w'
+        )
+        ttk.Entry(
+            connection_card,
+            textvariable=self.mt5_server_var,
+            state=entry_state
+        ).grid(row=2, column=1, sticky='ew', padx=(10, 0), pady=(0, 6))
+
+        ttk.Label(connection_card, text="MT5-Terminal (optional):", style='FieldLabel.TLabel').grid(
+            row=3, column=0, sticky='w'
+        )
+        ttk.Entry(
+            connection_card,
+            textvariable=self.mt5_path_var,
+            state=entry_state
+        ).grid(row=3, column=1, sticky='ew', padx=(10, 0), pady=(0, 6))
+        ttk.Button(
+            connection_card,
+            text="Durchsuchen…",
+            command=self.browse_mt5_path,
+            state=button_state
+        ).grid(row=3, column=2, sticky='w', padx=(8, 0), pady=(0, 6))
+
+        button_row = ttk.Frame(connection_card, style='Card.TFrame')
+        button_row.grid(row=4, column=0, columnspan=3, sticky='w', pady=(14, 0))
+        ttk.Button(
+            button_row,
+            text="Zugangsdaten speichern",
+            command=self.save_mt5_credentials,
+            state=button_state
+        ).pack(side='left')
+        ttk.Button(
+            button_row,
+            text="Verbindung testen",
+            command=self.test_mt5_connection,
+            state=button_state
+        ).pack(side='left', padx=(12, 0))
+
+        self.mt5_hint_label = ttk.Label(
+            connection_card,
+            text="",
+            style='Info.TLabel',
+            wraplength=780,
+            justify='left'
+        )
+        self.mt5_hint_label.grid(row=5, column=0, columnspan=3, sticky='w', pady=(12, 0))
+
+        status_card = ttk.Frame(mt5_tab, style='Card.TFrame', padding=(20, 18))
+        status_card.pack(fill='x', pady=(0, 18))
+        ttk.Label(
+            status_card,
+            text="Verbindungsstatus",
+            style='FieldLabel.TLabel'
+        ).pack(anchor='w')
+        self.mt5_summary_label = ttk.Label(
+            status_card,
+            text="",
+            style='Info.TLabel',
+            wraplength=780,
+            justify='left'
+        )
+        self.mt5_summary_label.pack(anchor='w', pady=(8, 0))
+
+        self._refresh_mt5_status_display()
+
+        checklist_card = ttk.Frame(mt5_tab, style='Card.TFrame', padding=(20, 18))
+        checklist_card.pack(fill='x')
+        ttk.Label(
+            checklist_card,
+            text="Checkliste vor dem Live-Betrieb:",
+            style='FieldLabel.TLabel'
+        ).pack(anchor='w')
+        checklist = ttk.Frame(checklist_card, style='Card.TFrame')
+        checklist.pack(fill='x', pady=(10, 0))
+        for idx, hint in enumerate([
+            "MetaTrader 5 ist installiert und das Python-Paket `MetaTrader5` ist verfügbar.",
+            "Konto-Login, Passwort und Server stammen aus dem gewünschten MT5-Konto.",
+            "Das Terminal (`terminal64.exe`) ist optional verknüpft, falls mehrere Installationen existieren.",
+            "Die Verbindung wurde erfolgreich getestet."
+        ]):
+            ttk.Label(
+                checklist,
+                text=f"• {hint}",
+                style='Info.TLabel',
+                wraplength=780,
+                justify='left'
+            ).grid(row=idx, column=0, sticky='w', pady=(0 if idx == 0 else 4, 0))
 
     def create_statistics_tab(self):
         """Tab für Statistiken des Kopierers"""
@@ -2284,40 +2440,6 @@ class TradingGUI:
                 text=f"Letzte Aktualisierung: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
             )
 
-    def toggle_demo_mode(self):
-        """Demo-Modus umschalten"""
-        desired_demo_mode = bool(self.demo_var.get())
-        if not desired_demo_mode:
-            if not self.bot.ensure_mt5_session(enforce_demo_on_fail=False):
-                message = self.bot.get_last_mt5_error() or "LIVE-Modus konnte nicht aktiviert werden."
-                self.demo_var.set(True)
-                self.bot.demo_mode = True
-                if hasattr(self, 'trade_status_label'):
-                    self.trade_status_label.config(text="Demo-Modus aktiv")
-                self.log_message(message)
-                try:
-                    messagebox.showwarning("LIVE-Modus nicht verfügbar", message)
-                except Exception:
-                    pass
-                return
-
-        self.bot.demo_mode = desired_demo_mode
-        mode_text = "Demo-Modus" if self.bot.demo_mode else "LIVE-Modus"
-        if hasattr(self, 'trade_status_label'):
-            status_text = "Demo-Modus aktiv" if self.bot.demo_mode else "LIVE-Modus aktiv"
-            self.trade_status_label.config(text=status_text)
-
-        trading_cfg = self.current_config.setdefault('trading', {})
-        previous_value = trading_cfg.get('demo_mode')
-        trading_cfg['demo_mode'] = self.bot.demo_mode
-        if previous_value != self.bot.demo_mode:
-            try:
-                self.config_manager.save_config(self.current_config)
-            except Exception as exc:
-                self.log_message(f"Fehler beim Speichern des Modus: {exc}")
-
-        self.log_message(f"Modus geändert: {mode_text}")
-
     def on_execution_mode_change(self, *_):
         """Ausführungsmodus wechseln und speichern."""
         selected_label = self.execution_mode_var.get() if hasattr(self, 'execution_mode_var') else None
@@ -2423,8 +2545,6 @@ class TradingGUI:
                             0,
                             lambda msg=info_message: self.show_auth_required_dialog(msg)
                         )
-                    elif msg_type == 'DEMO_MODE_ENFORCED':
-                        self._handle_demo_mode_enforced(data)
                     elif msg_type == 'CONFIRM_TRADE':
                         self._handle_trade_confirmation_request(data)
 
@@ -2434,37 +2554,6 @@ class TradingGUI:
             self.root.after(100, process_messages)
 
         process_messages()
-
-    def _handle_demo_mode_enforced(self, data):
-        """Setzt den Demo-Modus in der GUI und informiert den Nutzer."""
-        message = ""
-        if isinstance(data, dict):
-            message = str(data.get('message', '')).strip()
-        elif data is not None:
-            message = str(data).strip()
-
-        if hasattr(self, 'demo_var'):
-            self.demo_var.set(True)
-        self.bot.demo_mode = True
-
-        if hasattr(self, 'trade_status_label'):
-            self.trade_status_label.config(text="Demo-Modus aktiv")
-
-        trading_cfg = self.current_config.setdefault('trading', {})
-        previous_value = trading_cfg.get('demo_mode')
-        trading_cfg['demo_mode'] = True
-        if previous_value is not True:
-            try:
-                self.config_manager.save_config(self.current_config)
-            except Exception as exc:
-                self.log_message(f"Konfiguration konnte nicht gespeichert werden: {exc}")
-
-        if message:
-            self.log_message(message)
-            try:
-                messagebox.showwarning("Live-Modus deaktiviert", message)
-            except Exception:
-                pass
 
     def _handle_trade_confirmation_request(self, data):
         """Zeigt einen Bestätigungsdialog für eingehende Trades an."""
@@ -2555,13 +2644,6 @@ class TradingGUI:
         )
 
         trading_cfg = self.current_config.setdefault('trading', {})
-        demo_mode = bool(trading_cfg.get('demo_mode', True))
-        self.bot.demo_mode = demo_mode
-        if hasattr(self, 'demo_var'):
-            self.demo_var.set(demo_mode)
-        if hasattr(self, 'trade_status_label'):
-            self.trade_status_label.config(text="Demo-Modus aktiv" if demo_mode else "LIVE-Modus aktiv")
-
         execution_mode_value = trading_cfg.get('execution_mode', ExecutionMode.INSTANT.value)
         try:
             execution_mode = ExecutionMode(execution_mode_value)
@@ -2610,12 +2692,27 @@ class TradingGUI:
         self.bot.max_trades_per_hour = sanitized_values['max_trades_per_hour']
 
         mt5_cfg = self.current_config.setdefault('mt5', {})
+        login_value = self._coerce_to_str(mt5_cfg.get('login', ""))
+        password_value = self._coerce_to_str(mt5_cfg.get('password', ""))
+        server_value = self._coerce_to_str(mt5_cfg.get('server', ""))
+        path_value = self._coerce_to_str(mt5_cfg.get('path', ""))
+
+        try:
+            self.mt5_login_var.set(login_value)
+            self.mt5_password_var.set(password_value)
+            self.mt5_server_var.set(server_value)
+            self.mt5_path_var.set(path_value)
+        except tk.TclError:
+            pass
+
         self.bot.update_mt5_credentials(
-            mt5_cfg.get('login'),
-            mt5_cfg.get('password'),
-            mt5_cfg.get('server'),
-            mt5_cfg.get('path')
+            login_value.strip() or None,
+            password_value or None,
+            server_value.strip() or None,
+            path_value.strip() or None
         )
+
+        self._refresh_mt5_status_display()
 
         signal_defaults = self.config_manager.default_config.get('signals', {})
         signals_cfg = self.current_config.setdefault('signals', {})
@@ -2637,6 +2734,318 @@ class TradingGUI:
         """Log-Nachricht in GUI anzeigen"""
         self.log_text.insert('end', f"{message}\n")
         self.log_text.see('end')
+
+    def _format_mt5_summary(self, summary: Dict[str, str]) -> str:
+        """Formatiert die MT5-Kontoinformationen für Anzeigezwecke."""
+        lines: List[str] = []
+
+        login = summary.get('login')
+        if login:
+            line = f"Konto: {login}"
+            name = summary.get('name')
+            if name:
+                line = f"{line} – {name}"
+            lines.append(line)
+
+        server = summary.get('server')
+        if server:
+            lines.append(f"Server: {server}")
+
+        balance = summary.get('balance')
+        equity = summary.get('equity')
+        currency = summary.get('currency')
+        if balance:
+            balance_text = f"Balance: {balance}"
+            if currency:
+                balance_text = f"{balance_text} {currency}"
+            lines.append(balance_text)
+        if equity:
+            equity_text = f"Equity: {equity}"
+            if currency:
+                equity_text = f"{equity_text} {currency}"
+            lines.append(equity_text)
+
+        leverage = summary.get('leverage')
+        if leverage:
+            lines.append(f"Hebel: {leverage}")
+
+        return '\n'.join(lines)
+
+    def _collect_mt5_form_data(self):
+        """Liest die MT5-Formularwerte aus."""
+        try:
+            login = self.mt5_login_var.get()
+            password = self.mt5_password_var.get()
+            server = self.mt5_server_var.get()
+            path = self.mt5_path_var.get()
+        except tk.TclError:
+            return "", "", "", ""
+
+        return login.strip(), password, server.strip(), path.strip()
+
+    def _apply_mt5_status(
+        self,
+        status_text: str,
+        summary_text: Optional[str] = None,
+        *,
+        warning: bool = False,
+        hint_text: Optional[str] = None,
+        hint_warning: Optional[bool] = None
+    ):
+        """Aktualisiert Status-, Hinweis- und Zusammenfassungsanzeigen für MT5."""
+        label_style = 'Warning.TLabel' if warning else 'Info.TLabel'
+        if getattr(self, 'mt5_status_label', None):
+            try:
+                self.mt5_status_label.config(text=status_text, style=label_style)
+            except tk.TclError:
+                self.mt5_status_label.config(text=status_text)
+
+        summary_value = summary_text if summary_text is not None else ""
+        if getattr(self, 'mt5_summary_label', None):
+            try:
+                self.mt5_summary_label.config(text=summary_value, style=label_style)
+            except tk.TclError:
+                self.mt5_summary_label.config(text=summary_value)
+
+        if getattr(self, 'mt5_hint_label', None) and hint_text is not None:
+            hint_style = 'Warning.TLabel' if (hint_warning if hint_warning is not None else warning) else 'Info.TLabel'
+            try:
+                self.mt5_hint_label.config(text=hint_text, style=hint_style)
+            except tk.TclError:
+                self.mt5_hint_label.config(text=hint_text)
+
+    def _refresh_mt5_status_display(self):
+        """Setzt den MT5-Status basierend auf den aktuellen Formularwerten."""
+        if not getattr(self, 'mt5_status_label', None):
+            return
+
+        if not MT5_AVAILABLE:
+            summary = (
+                "Das MetaTrader5-Python-Modul wurde nicht gefunden. "
+                "Installieren Sie MetaTrader 5 inklusive des Python-Pakets, um Orders zu platzieren."
+            )
+            hint = "Installieren Sie das Paket z.B. über 'pip install MetaTrader5'."
+            self._apply_mt5_status(
+                "MT5-Modul nicht installiert",
+                summary,
+                warning=True,
+                hint_text=hint,
+                hint_warning=True
+            )
+            return
+
+        login, password, server, _ = self._collect_mt5_form_data()
+
+        if not login and not password and not server:
+            summary = (
+                "Keine Zugangsdaten hinterlegt. Tragen Sie Login, Passwort und Server ein und speichern Sie die Daten."
+            )
+            hint = "Nach dem Speichern können Sie die Verbindung über 'Verbindung testen' prüfen."
+            self._apply_mt5_status(
+                "Keine Zugangsdaten hinterlegt",
+                summary,
+                hint_text=hint
+            )
+            return
+
+        if not login or not password or not server:
+            summary = (
+                "Bitte füllen Sie Login, Passwort und Server vollständig aus, damit die MT5-Verbindung aufgebaut werden kann."
+            )
+            hint = "Speichern Sie die Daten nach dem Ausfüllen und testen Sie anschließend die Verbindung."
+            self._apply_mt5_status(
+                "Angaben unvollständig",
+                summary,
+                warning=True,
+                hint_text=hint,
+                hint_warning=True
+            )
+            return
+
+        summary = (
+            f"Zugangsdaten geladen für Konto {login}. Testen Sie die Verbindung, bevor Sie den Bot starten."
+        )
+        hint = "Mit 'Verbindung testen' überprüfen Sie Terminal und Zugangsdaten unmittelbar."
+        self._apply_mt5_status(
+            "Zugangsdaten geladen",
+            summary,
+            hint_text=hint
+        )
+
+    def save_mt5_credentials(self, silent: bool = False) -> bool:
+        """Speichert MT5-Zugangsdaten in der Konfiguration."""
+        login, password, server, path = self._collect_mt5_form_data()
+
+        mt5_cfg = self.current_config.setdefault('mt5', {})
+        mt5_cfg['login'] = login
+        mt5_cfg['password'] = password
+        mt5_cfg['server'] = server
+        mt5_cfg['path'] = path
+
+        self.bot.update_mt5_credentials(
+            login or None,
+            password or None,
+            server or None,
+            path or None
+        )
+
+        try:
+            self.config_manager.save_config(self.current_config)
+        except Exception as exc:
+            self.log_message(f"Fehler beim Speichern der MT5-Daten: {exc}")
+            return False
+
+        if not silent:
+            self.log_message("MT5-Zugangsdaten aktualisiert.")
+            if MT5_AVAILABLE:
+                if login and password and server:
+                    summary = (
+                        f"Zugangsdaten gespeichert für Konto {login}. "
+                        "Führen Sie 'Verbindung testen' aus, um die Anbindung zu prüfen."
+                    )
+                    hint = "Mit 'Verbindung testen' überprüfen Sie Terminal und Zugangsdaten unmittelbar."
+                    self._apply_mt5_status(
+                        "Zugangsdaten gespeichert",
+                        summary,
+                        hint_text=hint
+                    )
+                else:
+                    summary = "Bitte füllen Sie Login, Passwort und Server vollständig aus."
+                    hint = "Ohne vollständige Angaben kann keine MT5-Verbindung hergestellt werden."
+                    self._apply_mt5_status(
+                        "Angaben unvollständig",
+                        summary,
+                        warning=True,
+                        hint_text=hint,
+                        hint_warning=True
+                    )
+            else:
+                summary = (
+                    "Das MetaTrader5-Python-Modul wurde nicht gefunden. Installieren Sie es, um Orders zu platzieren."
+                )
+                hint = "Installiere MetaTrader 5 inklusive des Python-Pakets 'MetaTrader5'."
+                self._apply_mt5_status(
+                    "MT5-Modul nicht installiert",
+                    summary,
+                    warning=True,
+                    hint_text=hint,
+                    hint_warning=True
+                )
+        return True
+
+    def test_mt5_connection(self):
+        """Testet die Verbindung zu MetaTrader 5."""
+        if not MT5_AVAILABLE:
+            message = "MetaTrader5-Python-Modul ist nicht verfügbar. Installieren Sie es, um den LIVE-Modus zu nutzen."
+            self.log_message(message)
+            self._apply_mt5_status(
+                "MT5-Modul nicht installiert",
+                message,
+                warning=True,
+                hint_text="Installieren Sie MetaTrader 5 inklusive des Python-Pakets 'MetaTrader5'.",
+                hint_warning=True
+            )
+            try:
+                messagebox.showwarning("MT5 nicht verfügbar", message)
+            except Exception:
+                pass
+            return
+
+        login, password, server, path = self._collect_mt5_form_data()
+
+        if not login or not password or not server:
+            message = "Bitte geben Sie Login, Passwort und Server an, bevor Sie die Verbindung testen."
+            self.log_message(message)
+            self._apply_mt5_status(
+                "Angaben unvollständig",
+                message,
+                warning=True,
+                hint_text="Bitte füllen Sie alle Felder aus und speichern Sie die Daten vor dem Test.",
+                hint_warning=True
+            )
+            try:
+                messagebox.showwarning("Angaben unvollständig", message)
+            except Exception:
+                pass
+            return
+
+        if not self.save_mt5_credentials(silent=True):
+            return
+
+        self.log_message("Teste MT5-Verbindung ...")
+        success = self.bot.ensure_mt5_session()
+        if success:
+            message = "MT5-Verbindung erfolgreich aufgebaut."
+            self.log_message(message)
+            summary = self.bot.get_mt5_account_summary()
+            summary_text = ""
+            if summary:
+                summary_text = self._format_mt5_summary(summary) or ""
+                if summary_text:
+                    self.log_message(f"MT5-Kontoübersicht:\n{summary_text}")
+            display_text = message
+            if summary_text:
+                display_text = f"{message}\n\n{summary_text}"
+            self._apply_mt5_status(
+                "Verbindung aktiv",
+                display_text,
+                hint_text="Die Verbindung ist aktiv. Der Bot kann Trades direkt an MetaTrader 5 senden."
+            )
+            try:
+                messagebox.showinfo("Verbindung erfolgreich", display_text)
+            except Exception:
+                pass
+        else:
+            message = self.bot.get_last_mt5_error() or "MT5-Verbindung konnte nicht hergestellt werden."
+            self.log_message(message)
+            self._apply_mt5_status(
+                "Verbindung fehlgeschlagen",
+                message,
+                warning=True,
+                hint_text="Überprüfen Sie Zugangsdaten, Server und das laufende MT5-Terminal.",
+                hint_warning=True
+            )
+            try:
+                messagebox.showerror("Verbindung fehlgeschlagen", message)
+            except Exception:
+                pass
+
+    def browse_mt5_path(self):
+        """Dateidialog zum Auswählen des MT5-Terminals öffnen."""
+        if not MT5_AVAILABLE:
+            message = "MetaTrader5-Python-Modul ist nicht verfügbar."
+            self.log_message(message)
+            try:
+                messagebox.showwarning("MT5 nicht verfügbar", message)
+            except Exception:
+                pass
+            return
+
+        try:
+            selected = filedialog.askopenfilename(
+                title="MetaTrader-5-Terminal auswählen",
+                filetypes=[
+                    ("MetaTrader Terminal", "terminal64.exe"),
+                    ("Executable", "*.exe"),
+                    ("Alle Dateien", "*.*")
+                ]
+            )
+        except Exception as exc:
+            self.log_message(f"Fehler beim Öffnen des Dateidialogs: {exc}")
+            return
+
+        if not selected:
+            return
+
+        try:
+            self.mt5_path_var.set(selected)
+        except tk.TclError:
+            self.log_message("Der ausgewählte Pfad konnte nicht übernommen werden.")
+            return
+
+        self.save_mt5_credentials(silent=True)
+        self._refresh_mt5_status_display()
+        self.log_message("MT5-Terminalpfad aktualisiert.")
 
     def _add_trading_var_trace(self, key: str, var: tk.Variable, caster):
         """Trace für Trading-Variablen registrieren."""
@@ -2782,6 +3191,19 @@ class TradingGUI:
             minimum = 0
 
         return value >= minimum
+
+    def _coerce_to_str(self, value, default: str = "") -> str:
+        """Hilfsfunktion zur String-Normalisierung."""
+        if value is None:
+            return default or ""
+        if isinstance(value, str):
+            return value
+        try:
+            if isinstance(value, float) and value.is_integer():
+                return str(int(value))
+            return str(value)
+        except Exception:
+            return default or ""
 
     def _coerce_to_float(self, value, default: float) -> float:
         """Hilfsfunktion zur sicheren Float-Konvertierung."""
@@ -2932,8 +3354,8 @@ class SetupAssistant:
 
         warning_text = (
             "ACHTUNG: Dieses System führt automatische Trades aus!\n\n"
-            "• Verwenden Sie IMMER zuerst den Demo-Modus\n"
-            "• Testen Sie alle Funktionen gründlich\n"
+            "• Testen Sie alle Funktionen gründlich mit einem MT5-Demokonto\n"
+            "• Überprüfen Sie jede Strategie ausgiebig\n"
             "• Automatisiertes Trading birgt hohe Verlustrisiken\n"
             "• Überwachen Sie das System kontinuierlich\n"
             "• Setzen Sie strikte Risikogrenzen\n\n"
@@ -3053,8 +3475,7 @@ def show_startup_warning() -> bool:
         "Dieses System kann automatisch Trades ausführen!\n\n"
         "• Hohe finanzielle Verlustrisiken\n"
         "• Nur für erfahrene Trader geeignet\n"
-        "• Umfangreiche Tests erforderlich\n"
-        "• Demo-Modus wird dringend empfohlen\n\n"
+        "• Umfangreiche Tests mit einem MT5-Demokonto erforderlich\n\n"
         "Möchten Sie fortfahren?"
     )
     result = messagebox.askyesno("Sicherheitswarnung", warning_text, icon='warning')
