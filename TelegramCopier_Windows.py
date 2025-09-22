@@ -2106,7 +2106,11 @@ class TradingGUI:
         header = ttk.Frame(mt5_tab, style='Main.TFrame')
         header.pack(fill='x')
         ttk.Label(header, text="MetaTrader 5 Integration", style='SectionTitle.TLabel').pack(side='left')
-        status_text = "MT5-Unterstützung verfügbar" if MT5_AVAILABLE else "MT5-Modul nicht gefunden"
+        status_text = (
+            "MT5-Unterstützung verfügbar"
+            if MT5_AVAILABLE
+            else "MT5-Modul nicht gefunden – Eingabe möglich"
+        )
         ttk.Label(header, text=status_text, style='Info.TLabel').pack(side='right')
 
         mt5_frame = ttk.Frame(mt5_tab, style='Card.TFrame', padding=(20, 18))
@@ -2118,8 +2122,10 @@ class TradingGUI:
             style='FieldLabel.TLabel'
         ).grid(row=0, column=0, columnspan=3, sticky='w')
 
-        entry_state = 'normal' if MT5_AVAILABLE else 'disabled'
-        button_state = 'normal' if MT5_AVAILABLE else 'disabled'
+        entry_state = 'normal'
+        browse_button_state = 'normal'
+        save_button_state = 'normal'
+        test_button_state = 'normal' if MT5_AVAILABLE else 'disabled'
 
         ttk.Label(mt5_frame, text="Login (Kontonummer):", style='FieldLabel.TLabel').grid(
             row=1, column=0, sticky='w', pady=(12, 4)
@@ -2161,7 +2167,7 @@ class TradingGUI:
             mt5_frame,
             text="Durchsuchen…",
             command=self.browse_mt5_path,
-            state=button_state
+            state=browse_button_state
         ).grid(row=4, column=2, sticky='w', padx=(8, 0), pady=(0, 4))
 
         mt5_button_row = ttk.Frame(mt5_frame, style='Card.TFrame')
@@ -2170,13 +2176,13 @@ class TradingGUI:
             mt5_button_row,
             text="Zugangsdaten speichern",
             command=self.save_mt5_credentials,
-            state=button_state
+            state=save_button_state
         ).pack(side='left')
         ttk.Button(
             mt5_button_row,
             text="Verbindung testen",
             command=self.test_mt5_connection,
-            state=button_state
+            state=test_button_state
         ).pack(side='left', padx=(12, 0))
 
         self.mt5_status_card = ttk.Frame(mt5_frame, style='Card.TFrame', padding=(12, 10))
