@@ -3958,25 +3958,54 @@ def main():
 
     try:
         config_manager = ConfigManager()
+        cfg = config_manager.load_config()
+
+        def _has_required_credentials(config: Dict) -> bool:
+            telegram_cfg = config.get('telegram', {})
+            required_fields = ('api_id', 'api_hash', 'phone')
+            return all(telegram_cfg.get(field) for field in required_fields)
+
+        setup_completed = False
 
         if check_first_run():
-            root = tk.Tk()
-            root.withdraw()
-            setup = SetupAssistant(root)
-            setup.show_setup_dialog()
-            root.mainloop()
-            root.destroy()
+            if not _has_required_credentials(cfg):
+                root = tk.Tk()
+                root.withdraw()
+                setup = SetupAssistant(root)
+                setup.show_setup_dialog()
+                root.mainloop()
+                root.destroy()
 
-            if not setup.config_saved:
-                print("Setup abgebrochen. Anwendung wird beendet.")
+                if not setup.config_saved:
+                    print("Setup abgebrochen. Anwendung wird beendet.")
+                    return
+
+                setup_completed = True
+                cfg = config_manager.load_config()
+
+        telegram_cfg = cfg.get('telegram', {})
+        missing_credentials = not _has_required_credentials(cfg)
+
+        should_prompt = False
+        if not setup_completed:
+            if telegram_cfg.get('prompt_credentials_on_start'):
+                should_prompt = True
+            if missing_credentials:
+                should_prompt = True
+
+        if should_prompt:
+            if not prompt_for_api_credentials(config_manager, cfg):
+                print("Keine API-Zugangsdaten eingegeben. Anwendung wird beendet.")
                 return
 
-        # Konfiguration laden und auf Bot anwenden
-        if not prompt_for_api_credentials(config_manager):
-            print("Keine API-Zugangsdaten eingegeben. Anwendung wird beendet.")
+            cfg = config_manager.load_config()
+            telegram_cfg = cfg.get('telegram', {})
+            missing_credentials = not _has_required_credentials(cfg)
+
+        if missing_credentials:
+            print("Keine gültigen API-Zugangsdaten vorhanden. Anwendung wird beendet.")
             return
 
-        cfg = config_manager.load_config()
         app = TradingGUI(cfg)
         app.run()
 
