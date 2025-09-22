@@ -17,6 +17,21 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Optional, Dict, List, Awaitable
 
+# >>> numpy/mt5 guard
+try:
+    import numpy as _np
+    _major = int(_np.__version__.split(".")[0])
+    if _major >= 2:
+        raise RuntimeError(
+            f"NumPy {_np.__version__} erkannt. MetaTrader5 benoetigt NumPy 1.x. "
+            "Bitte starte 'scripts\\fix_mt5_numpy.bat' oder installiere: "
+            "pip uninstall -y numpy && pip install numpy==1.26.4"
+        )
+except Exception as _e:
+    print("[startup]", _e)
+    raise
+# <<< numpy/mt5 guard
+
 # ---- optionale Abhängigkeit: MetaTrader5 (nur für Windows verfügbar) ----
 try:
     import MetaTrader5 as mt5  # noqa: F401

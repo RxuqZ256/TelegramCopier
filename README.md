@@ -2,6 +2,13 @@
 
 Er kopiert Signale von Telegram zu MT5.
 
+### Windows (Ein-Klick-Start)
+1) In GitHub Desktop **Fetch/Pull**.
+2) Im Explorer `scripts\fix_mt5_numpy.bat` **Doppelklicken**.
+   - Erzwingt NumPy 1.26.4 (kompatibel mit MetaTrader5 5.0.45),
+   - installiert Anforderungen,
+   - startet `TelegramCopier_Windows.py` (Onboarding-Popup erscheint).
+
 ## Windows-EXE erstellen
 
 Mit dem Skript `build_windows_exe.bat` kannst du unter Windows eine ausführbare Datei erstellen. Du benötigst dafür eine 64-Bit-Python-Installation (empfohlen wird Python 3.11), weil PyInstaller die Abhängigkeiten direkt aus der installierten Umgebung einsammelt.

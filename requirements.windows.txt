@@ -1,2 +1,10 @@
--r requirements.txt
+numpy==1.26.4
 MetaTrader5==5.0.45
+telethon
+python-dotenv
+pyasn1
+rsa
+requests
+urllib3
+idna
+charset-normalizer
