@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 
-def run_app(session: Optional[Dict[str, Any]] = None) -> None:
+def run_app(session: Optional[Dict[str, Any]] = None, initial_page: str = "dashboard") -> None:
     """Start the desktop UI.
 
     Parameters
@@ -13,6 +13,8 @@ def run_app(session: Optional[Dict[str, Any]] = None) -> None:
     session:
         Optional session information. Currently unused, but reserved for
         compatibility with other launchers.
+    initial_page:
+        Name of the page that should be shown first when the UI opens.
     """
 
     # Avoid circular imports by importing lazily within the function.
@@ -75,6 +77,7 @@ def run_app(session: Optional[Dict[str, Any]] = None) -> None:
             return
 
         app = TradingGUI(cfg)
+        app.set_initial_page(initial_page)
         app.run()
     except Exception as exc:  # pragma: no cover - defensive error reporting
         print(f"Fehler beim Starten der Anwendung: {exc}")
