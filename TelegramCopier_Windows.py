@@ -66,6 +66,23 @@ def run_onboarding_if_needed():
     print("[onboarding] configuration loaded")
 # <<< numpy/mt5 guard + onboarding bootstrap
 
+# >>> UI bootstrap + flags
+def _start_ui():
+    from ui.app import run_app
+
+    session_info = {"tg_target": os.getenv("TG_TARGET", ""), "user": "local"}
+    run_app(session=session_info)
+
+
+def handle_cli_flags() -> bool:
+    if "--ui" in sys.argv:
+        if "--setup" in sys.argv:
+            run_onboarding_if_needed()
+        _start_ui()
+        return True
+    return False
+# <<< UI bootstrap + flags
+
 # ---- optionale Abhängigkeit: MetaTrader5 (nur für Windows verfügbar) ----
 try:
     import MetaTrader5 as mt5  # noqa: F401
@@ -5158,65 +5175,15 @@ def prompt_for_api_credentials(config_manager: ConfigManager, config: Optional[D
 
 def main():
     """Hauptfunktion mit Setup-Assistent"""
+    if handle_cli_flags():
+        return
+
     run_onboarding_if_needed()
     if not show_startup_warning():
         print("Programm abgebrochen.")
         return
 
-    try:
-        config_manager = ConfigManager()
-        cfg = config_manager.load_config()
-
-        def _has_required_credentials(config: Dict) -> bool:
-            telegram_cfg = config.get('telegram', {})
-            required_fields = ('api_id', 'api_hash', 'phone')
-            return all(telegram_cfg.get(field) for field in required_fields)
-
-        def _launch_setup_wizard() -> bool:
-            root = tk.Tk()
-            root.withdraw()
-            setup = SetupAssistant(root)
-            setup.show_setup_dialog()
-            root.mainloop()
-            root.destroy()
-
-            if not setup.config_saved:
-                print("Setup abgebrochen. Anwendung wird beendet.")
-                return False
-
-            return True
-
-        setup_completed = False
-
-        if check_first_run():
-            if not _launch_setup_wizard():
-                return
-
-            setup_completed = True
-            cfg = config_manager.load_config()
-
-        telegram_cfg = cfg.get('telegram', {})
-        missing_credentials = not _has_required_credentials(cfg)
-
-        if not setup_completed and (telegram_cfg.get('prompt_credentials_on_start') or missing_credentials):
-            if not _launch_setup_wizard():
-                return
-
-            setup_completed = True
-            cfg = config_manager.load_config()
-            telegram_cfg = cfg.get('telegram', {})
-            missing_credentials = not _has_required_credentials(cfg)
-
-        if missing_credentials:
-            print("Keine gültigen API-Zugangsdaten vorhanden. Anwendung wird beendet.")
-            return
-
-        app = TradingGUI(cfg)
-        app.run()
-
-    except Exception as e:
-        print(f"Fehler beim Starten der Anwendung: {e}")
-        input("Drücken Sie Enter zum Beenden...")
+    _start_ui()
 
 
 if __name__ == "__main__":
