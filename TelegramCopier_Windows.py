@@ -1807,6 +1807,7 @@ class TradingGUI:
 
         self.create_chat_overview_tab()
         self.create_bot_settings_tab()
+        self.create_mt5_settings_tab()
         self.create_statistics_tab()
 
         # Status Bar
@@ -2055,12 +2056,65 @@ class TradingGUI:
             spinbox.grid(row=row, column=column + 1, sticky='w', padx=(10, 0), pady=(0, 6))
             numeric_frame.grid_rowconfigure(row, pad=6)
 
-        mt5_frame = ttk.Frame(settings_tab, style='Card.TFrame', padding=(20, 18))
-        mt5_frame.pack(fill='x', pady=(0, 18))
+        toolbar = ttk.Frame(settings_tab, style='Toolbar.TFrame', padding=(16, 12))
+        toolbar.pack(fill='x', pady=(0, 18))
+        ttk.Button(toolbar, text="📥 Signale abrufen", style='Toolbar.TButton', command=self.load_chats).pack(side='left')
+        ttk.Button(toolbar, text="🧹 Log leeren", style='Toolbar.TButton', command=self.clear_log).pack(side='left', padx=(10, 0))
+        ttk.Button(toolbar, text="📊 Statistiken aktualisieren", style='Toolbar.TButton', command=self.refresh_statistics).pack(side='left', padx=(10, 0))
+
+        metrics_frame = ttk.Frame(settings_tab, style='Main.TFrame')
+        metrics_frame.pack(fill='x', pady=(0, 18))
+        metrics_frame.columnconfigure((0, 1, 2), weight=1)
+        for idx, (title, value) in enumerate([
+            ("Aktive Chats", "0"),
+            ("Überwachte Signale", "0"),
+            ("Heute synchronisiert", "0")
+        ]):
+            metric = ttk.Frame(metrics_frame, style='Metric.TFrame', padding=(16, 12))
+            metric.grid(row=0, column=idx, padx=(0 if idx == 0 else 12, 0), sticky='nsew')
+            ttk.Label(metric, text=title, style='MetricTitle.TLabel').pack(anchor='w')
+            ttk.Label(metric, text=value, style='MetricValue.TLabel').pack(anchor='w', pady=(4, 0))
+
+        log_frame = ttk.LabelFrame(settings_tab, text="Live-Aktivitätsprotokoll", padding="16", style='Card.TLabelframe')
+        log_frame.pack(fill='both', expand=True)
+
+        self.log_text = tk.Text(
+            log_frame,
+            height=16,
+            wrap='word',
+            bg=self.theme_colors['surface_bg'],
+            fg=self.theme_colors['text'],
+            insertbackground=self.theme_colors['accent'],
+            font=('Consolas', 11),
+            borderwidth=0,
+            relief='flat',
+            highlightthickness=1,
+            highlightbackground=self.theme_colors['border'],
+            highlightcolor=self.theme_colors['border']
+        )
+        self.log_text.pack(side='left', fill='both', expand=True)
+
+        log_scroll = ttk.Scrollbar(log_frame, orient='vertical', command=self.log_text.yview)
+        log_scroll.pack(side='right', fill='y')
+        self.log_text.configure(yscrollcommand=log_scroll.set, padx=14, pady=12, spacing3=6)
+
+    def create_mt5_settings_tab(self):
+        """Tab für MetaTrader-5-Zugangsdaten und Verbindung"""
+        mt5_tab = ttk.Frame(self.notebook, padding=(24, 24, 24, 20), style='Main.TFrame')
+        self.notebook.add(mt5_tab, text="MetaTrader 5")
+
+        header = ttk.Frame(mt5_tab, style='Main.TFrame')
+        header.pack(fill='x')
+        ttk.Label(header, text="MetaTrader 5 Integration", style='SectionTitle.TLabel').pack(side='left')
+        status_text = "MT5-Unterstützung verfügbar" if MT5_AVAILABLE else "MT5-Modul nicht gefunden"
+        ttk.Label(header, text=status_text, style='Info.TLabel').pack(side='right')
+
+        mt5_frame = ttk.Frame(mt5_tab, style='Card.TFrame', padding=(20, 18))
+        mt5_frame.pack(fill='x', pady=(20, 18))
         mt5_frame.columnconfigure(1, weight=1)
         ttk.Label(
             mt5_frame,
-            text="MetaTrader 5 Verbindung",
+            text="Verbindung konfigurieren",
             style='FieldLabel.TLabel'
         ).grid(row=0, column=0, columnspan=3, sticky='w')
 
@@ -2158,48 +2212,6 @@ class TradingGUI:
             ).grid(row=7, column=0, columnspan=3, sticky='w', pady=(12, 0))
 
         self._refresh_mt5_status_display()
-
-        toolbar = ttk.Frame(settings_tab, style='Toolbar.TFrame', padding=(16, 12))
-        toolbar.pack(fill='x', pady=(0, 18))
-        ttk.Button(toolbar, text="📥 Signale abrufen", style='Toolbar.TButton', command=self.load_chats).pack(side='left')
-        ttk.Button(toolbar, text="🧹 Log leeren", style='Toolbar.TButton', command=self.clear_log).pack(side='left', padx=(10, 0))
-        ttk.Button(toolbar, text="📊 Statistiken aktualisieren", style='Toolbar.TButton', command=self.refresh_statistics).pack(side='left', padx=(10, 0))
-
-        metrics_frame = ttk.Frame(settings_tab, style='Main.TFrame')
-        metrics_frame.pack(fill='x', pady=(0, 18))
-        metrics_frame.columnconfigure((0, 1, 2), weight=1)
-        for idx, (title, value) in enumerate([
-            ("Aktive Chats", "0"),
-            ("Überwachte Signale", "0"),
-            ("Heute synchronisiert", "0")
-        ]):
-            metric = ttk.Frame(metrics_frame, style='Metric.TFrame', padding=(16, 12))
-            metric.grid(row=0, column=idx, padx=(0 if idx == 0 else 12, 0), sticky='nsew')
-            ttk.Label(metric, text=title, style='MetricTitle.TLabel').pack(anchor='w')
-            ttk.Label(metric, text=value, style='MetricValue.TLabel').pack(anchor='w', pady=(4, 0))
-
-        log_frame = ttk.LabelFrame(settings_tab, text="Live-Aktivitätsprotokoll", padding="16", style='Card.TLabelframe')
-        log_frame.pack(fill='both', expand=True)
-
-        self.log_text = tk.Text(
-            log_frame,
-            height=16,
-            wrap='word',
-            bg=self.theme_colors['surface_bg'],
-            fg=self.theme_colors['text'],
-            insertbackground=self.theme_colors['accent'],
-            font=('Consolas', 11),
-            borderwidth=0,
-            relief='flat',
-            highlightthickness=1,
-            highlightbackground=self.theme_colors['border'],
-            highlightcolor=self.theme_colors['border']
-        )
-        self.log_text.pack(side='left', fill='both', expand=True)
-
-        log_scroll = ttk.Scrollbar(log_frame, orient='vertical', command=self.log_text.yview)
-        log_scroll.pack(side='right', fill='y')
-        self.log_text.configure(yscrollcommand=log_scroll.set, padx=14, pady=12, spacing3=6)
 
     def create_statistics_tab(self):
         """Tab für Statistiken des Kopierers"""
