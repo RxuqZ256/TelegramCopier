@@ -23,3 +23,8 @@ Wenn du Anpassungen an den PyInstaller-Optionen vornehmen möchtest (z.B. `--one
 4. Über **„Verbindung testen“** prüfst du sofort, ob die MT5-Schnittstelle erreichbar ist. Bei Erfolg kannst du den Demo-Modus deaktivieren – auch ein MT5-Demokonto lässt sich so nutzen.
 
 > Hinweis: Ohne installiertes MetaTrader5-Python-Modul bleibt der Live-Modus deaktiviert. Installiere MetaTrader 5 inklusive des Python-Pakets `MetaTrader5`, damit die Verbindung funktioniert.
+
+## Manuelle Tests
+
+- 2024-04-XX: In der GUI ein nicht-numerisches Login (z. B. `12abc`) eingegeben → Warnung "MT5-Login ungültig" erscheint, die Zugangsdaten werden nicht gespeichert und der Status bleibt im Warnzustand.
+- 2024-04-XX: Gültiges numerisches Login eingegeben, Passwort und Server ergänzt → Zugangsdaten lassen sich speichern, der Status meldet "MT5-Zugangsdaten geladen" und der bisherige Erfolgsfluss bleibt erhalten.
