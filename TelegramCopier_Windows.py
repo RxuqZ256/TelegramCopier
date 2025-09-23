@@ -13,7 +13,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Optional, Dict, List, Awaitable
+from typing import Optional, Dict, List, Awaitable, Tuple
 
 # >>> numpy/mt5 guard + onboarding bootstrap
 import os, sys, pathlib, traceback
@@ -36,21 +36,34 @@ def _console_onboarding():
     try:
         api_id = input("API ID (nur Ziffern): ").strip()
         api_hash = input("API Hash: ").strip()
-        tg_target = input("Source chat (@name oder -100...): ").strip()
-        forward_to = input("Forward to (optional): ").strip()
     except KeyboardInterrupt:
-        print("[onboarding] cancelled by user"); sys.exit(0)
+        print("[onboarding] cancelled by user")
+        sys.exit(0)
 
-    with open(".env", "w", encoding="utf-8") as f:
-        f.write(f"TG_API_ID={api_id}\n")
-        f.write(f"TG_API_HASH={api_hash}\n")
-        f.write(f"TG_TARGET={tg_target}\n")
-        if forward_to: f.write(f"FORWARD_TO={forward_to}\n")
+    env_values = {}
+    if os.path.exists(".env"):
+        try:
+            with open(".env", "r", encoding="utf-8") as env_file:
+                for line in env_file:
+                    if "=" in line:
+                        key, value = line.strip().split("=", 1)
+                        if key:
+                            env_values[key] = value
+        except Exception:
+            env_values = {}
 
-    os.environ["TG_API_ID"]   = str(api_id)
+    env_values["TG_API_ID"] = str(api_id)
+    env_values["TG_API_HASH"] = api_hash
+
+    try:
+        with open(".env", "w", encoding="utf-8") as env_file:
+            for key, value in env_values.items():
+                env_file.write(f"{key}={value}\n")
+    except Exception as exc:
+        print(f"[onboarding] could not update .env: {exc}")
+
+    os.environ["TG_API_ID"] = str(api_id)
     os.environ["TG_API_HASH"] = api_hash
-    os.environ["TG_TARGET"]   = tg_target
-    if forward_to: os.environ["FORWARD_TO"] = forward_to
     print("[onboarding] configuration saved via console", flush=True)
 
 
@@ -60,16 +73,19 @@ def run_onboarding_if_needed():
     force_console    = ("--console-setup" in sys.argv)
     if force_gui_always or "--setup" in sys.argv:
         try:
-            if os.path.exists(".env"): os.remove(".env")
-        except Exception: pass
-        for k in ("TG_API_ID","TG_API_HASH","TG_TARGET","FORWARD_TO"): os.environ.pop(k, None)
+            if os.path.exists(".env"):
+                os.remove(".env")
+        except Exception:
+            pass
+        for k in ("TG_API_ID", "TG_API_HASH", "TG_TARGET", "FORWARD_TO"):
+            os.environ.pop(k, None)
 
     if force_console:
         print("[onboarding] forcing console setup...", flush=True)
         _console_onboarding()
         return
 
-    env_ready = bool(os.getenv("TG_API_ID") and os.getenv("TG_API_HASH") and os.getenv("TG_TARGET"))
+    env_ready = bool(os.getenv("TG_API_ID") and os.getenv("TG_API_HASH"))
     has_env   = os.path.exists(".env")
     if not (force_gui_always or "--setup" in sys.argv):
         if env_ready and has_env:
@@ -83,10 +99,8 @@ def run_onboarding_if_needed():
         if not cfg:
             raise RuntimeError("GUI onboarding returned no data")
 
-        os.environ["TG_API_ID"]   = str(cfg["api_id"])
+        os.environ["TG_API_ID"] = str(cfg["api_id"])
         os.environ["TG_API_HASH"] = cfg["api_hash"]
-        os.environ["TG_TARGET"]   = cfg["tg_target"]
-        if cfg.get("forward_to"): os.environ["FORWARD_TO"] = cfg["forward_to"]
         print("[onboarding] configuration loaded (GUI)", flush=True)
 
     except Exception as e:
@@ -1943,6 +1957,12 @@ class TradingGUI:
         self.automation_rules_container: Optional[ttk.Frame] = None
         self.exposure_list_frame: Optional[ttk.Frame] = None
 
+        self.chat_status_var: Optional[tk.StringVar] = None
+        self.chats_listbox: Optional[tk.Listbox] = None
+        self.refresh_chats_button: Optional[ttk.Button] = None
+        self.save_chats_button: Optional[ttk.Button] = None
+        self._chat_entries: List[Dict[str, object]] = []
+
         # Statistik- und Diagrammzustände
         self.stats_sharpe_var: Optional[tk.StringVar] = None
         self.stats_sortino_var: Optional[tk.StringVar] = None
@@ -2210,6 +2230,7 @@ class TradingGUI:
         self.notebook = ttk.Notebook(self.main_frame)
         self.notebook.pack(fill='both', expand=True)
 
+        self.create_chats_tab()
         self.create_chat_overview_tab()
         self.create_bot_settings_tab()
         self.create_mt5_settings_tab()
@@ -2234,6 +2255,67 @@ class TradingGUI:
 
         self._update_status_badges()
 
+    def create_chats_tab(self):
+        """Tab zum Aktualisieren und Auswählen der Telegram-Chats."""
+
+        chats_tab = ttk.Frame(self.notebook, padding=(24, 24, 24, 20), style='Main.TFrame')
+        self.chats_tab = chats_tab
+        self.notebook.add(chats_tab, text="Chats")
+
+        ttk.Label(chats_tab, text="Chats", style='SectionTitle.TLabel').pack(anchor='w')
+        ttk.Label(
+            chats_tab,
+            text="Lade deine Dialoge aus Telegram und wähle die gewünschte Quelle aus.",
+            style='Info.TLabel'
+        ).pack(anchor='w', pady=(6, 12))
+
+        list_container = ttk.Frame(chats_tab, style='Main.TFrame')
+        list_container.pack(fill='both', expand=True)
+
+        listbox_bg = self.theme_colors.get('surface_bg', '#151a22')
+        listbox_fg = self.theme_colors.get('text', '#eef2f7')
+        select_bg = self.theme_colors.get('accent_soft', '#1b2d4a')
+        select_fg = self.theme_colors.get('text', '#eef2f7')
+
+        self.chats_listbox = tk.Listbox(
+            list_container,
+            height=18,
+            activestyle='none',
+            exportselection=False,
+            bg=listbox_bg,
+            fg=listbox_fg,
+            highlightthickness=0,
+            relief='flat',
+            selectbackground=select_bg,
+            selectforeground=select_fg,
+            font=('Segoe UI', 10)
+        )
+        self.chats_listbox.pack(fill='both', expand=True)
+
+        toolbar = ttk.Frame(chats_tab, style='Toolbar.TFrame', padding=(18, 12))
+        toolbar.pack(fill='x', pady=(12, 0))
+
+        self.chat_status_var = tk.StringVar(master=self.root, value="Keine Chats geladen")
+        ttk.Label(toolbar, textvariable=self.chat_status_var, style='InfoBar.TLabel').pack(side='left')
+
+        self.refresh_chats_button = ttk.Button(
+            toolbar,
+            text="Refresh from Telegram",
+            style='Toolbar.TButton',
+            command=self._refresh_chats_from_telegram
+        )
+        self.refresh_chats_button.pack(side='right')
+
+        self.save_chats_button = ttk.Button(
+            toolbar,
+            text="Save selection",
+            style='Toolbar.TButton',
+            command=self._save_selected_chat
+        )
+        self.save_chats_button.pack(side='right', padx=(0, 12))
+
+        self._load_chats_from_file()
+
     def set_initial_page(self, page_key: str) -> None:
         """Select the requested notebook page when the UI starts."""
         if not hasattr(self, 'notebook'):
@@ -2244,6 +2326,8 @@ class TradingGUI:
 
         if normalized in {'settings', 'bot', 'bot_settings'} and hasattr(self, 'bot_settings_tab'):
             target = self.bot_settings_tab
+        elif normalized in {'chats', 'chat'} and hasattr(self, 'chats_tab'):
+            target = self.chats_tab
         elif normalized in {'dashboard', 'home'} and hasattr(self, 'dashboard_tab'):
             target = self.dashboard_tab
         elif hasattr(self, 'dashboard_tab'):
@@ -2259,6 +2343,336 @@ class TradingGUI:
                 self.notebook.select(target)
             except Exception:
                 pass
+
+    def _load_chats_from_file(self) -> None:
+        """Chats aus chat_config.json in die Liste laden."""
+        if not self.chats_listbox:
+            return
+
+        config_data = self._read_chat_config()
+        selected_identifier = None
+
+        if isinstance(config_data, dict):
+            selected_entry = self._normalize_chat_entry(config_data.get('selected_chat'))
+            if selected_entry:
+                selected_identifier = self._entry_identifier(selected_entry)
+            entries = self._normalize_chat_entries(config_data)
+        else:
+            entries = []
+
+        self._set_chat_entries(entries, selected_identifier)
+
+        if entries:
+            self._set_chat_status(f"Geladene Chats: {len(entries)}")
+        else:
+            self._set_chat_status("Keine Chats geladen")
+
+    def _read_chat_config(self) -> Optional[Dict]:
+        """chat_config.json einlesen."""
+        if not os.path.exists('chat_config.json'):
+            return None
+
+        try:
+            with open('chat_config.json', 'r', encoding='utf-8') as file:
+                data = json.load(file)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+        return None
+
+    def _write_chat_config(
+        self,
+        known_chats: List[Dict[str, object]],
+        selected_chat: Optional[Dict[str, object]] = None
+    ) -> None:
+        """chat_config.json aktualisieren."""
+
+        payload: Dict[str, object] = {}
+        existing = self._read_chat_config()
+        if isinstance(existing, dict):
+            payload.update(existing)
+
+        payload['known_chats'] = [
+            {
+                'title': entry.get('title', 'Chat'),
+                'username': entry.get('username'),
+                'id': entry.get('id')
+            }
+            for entry in known_chats
+        ]
+
+        if selected_chat is not None:
+            payload['selected_chat'] = {
+                'title': selected_chat.get('title', 'Chat'),
+                'username': selected_chat.get('username'),
+                'id': selected_chat.get('id')
+            }
+        else:
+            payload.pop('selected_chat', None)
+
+        with open('chat_config.json', 'w', encoding='utf-8') as file:
+            json.dump(payload, file, indent=2, ensure_ascii=False)
+
+    def _normalize_chat_entries(self, data) -> List[Dict[str, object]]:
+        """Rohdaten aus der Konfiguration vereinheitlichen."""
+
+        entries: List[Dict[str, object]] = []
+        if isinstance(data, dict):
+            known_chats = data.get('known_chats')
+            if isinstance(known_chats, list):
+                source = known_chats
+            else:
+                source = []
+                for key, value in data.items():
+                    if key == 'selected_chat':
+                        continue
+                    normalized = self._normalize_chat_entry(value, key)
+                    if normalized:
+                        entries.append(normalized)
+                return entries
+        elif isinstance(data, list):
+            source = data
+        else:
+            return entries
+
+        for item in source:
+            normalized = self._normalize_chat_entry(item)
+            if normalized:
+                entries.append(normalized)
+        return entries
+
+    @staticmethod
+    def _normalize_chat_entry(entry, fallback_id: Optional[object] = None) -> Optional[Dict[str, object]]:
+        """Einzelnen Chat-Eintrag normalisieren."""
+
+        if not isinstance(entry, dict):
+            return None
+
+        raw_title = entry.get('title') or entry.get('chat_name') or entry.get('name') or entry.get('first_name')
+        title = str(raw_title).strip() if raw_title else 'Chat'
+
+        username = entry.get('username')
+        if username:
+            username = str(username).strip()
+            if username and not username.startswith('@'):
+                username = f"@{username}"
+        else:
+            username = None
+
+        chat_id = entry.get('id')
+        if chat_id is None:
+            chat_id = entry.get('chat_id')
+        if chat_id is None and fallback_id is not None:
+            try:
+                chat_id = int(str(fallback_id))
+            except (TypeError, ValueError):
+                chat_id = str(fallback_id)
+
+        return {
+            'title': title,
+            'username': username,
+            'id': chat_id
+        }
+
+    @staticmethod
+    def _entry_identifier(entry: Optional[Dict[str, object]]) -> str:
+        if not entry:
+            return ""
+        username = entry.get('username')
+        if username:
+            return str(username)
+        chat_id = entry.get('id')
+        if chat_id is None:
+            return ""
+        return str(chat_id)
+
+    def _set_chat_entries(
+        self,
+        entries: List[Dict[str, object]],
+        selected_identifier: Optional[str] = None
+    ) -> None:
+        """Listbox mit den übergebenen Einträgen befüllen."""
+
+        self._chat_entries = list(entries)
+        if not self.chats_listbox:
+            return
+
+        self.chats_listbox.delete(0, 'end')
+        for entry in entries:
+            identifier = self._entry_identifier(entry)
+            title = entry.get('title') or 'Chat'
+            display = f"{title}  ({identifier})" if identifier else title
+            self.chats_listbox.insert('end', display)
+
+        if selected_identifier:
+            for index, entry in enumerate(entries):
+                if self._entry_identifier(entry) == selected_identifier:
+                    self.chats_listbox.selection_set(index)
+                    self.chats_listbox.see(index)
+                    break
+
+    def _set_chat_status(self, text: str) -> None:
+        if self.chat_status_var is not None:
+            self.chat_status_var.set(text)
+
+    def _set_chat_buttons_state(self, busy: bool) -> None:
+        state = ['disabled'] if busy else ['!disabled']
+        for button in (self.refresh_chats_button, self.save_chats_button):
+            if button is not None:
+                button.state(state)
+
+    def _resolve_telegram_credentials(self) -> Tuple[Optional[str], Optional[str]]:
+        telegram_cfg = (self.current_config or {}).get('telegram', {}) if isinstance(self.current_config, dict) else {}
+        api_id = telegram_cfg.get('api_id') or os.getenv('TG_API_ID')
+        api_hash = telegram_cfg.get('api_hash') or os.getenv('TG_API_HASH')
+        api_id_str = str(api_id).strip() if api_id not in (None, '') else None
+        api_hash_str = str(api_hash).strip() if api_hash not in (None, '') else None
+        return api_id_str, api_hash_str
+
+    def _refresh_chats_from_telegram(self) -> None:
+        api_id, api_hash = self._resolve_telegram_credentials()
+        if not api_id or not api_hash:
+            messagebox.showerror(
+                "Telegram",
+                "Bitte hinterlegen Sie zunächst eine gültige API ID und einen API Hash."
+            )
+            return
+
+        try:
+            api_id_int = int(api_id)
+        except (TypeError, ValueError):
+            messagebox.showerror("Telegram", "Die API ID muss numerisch sein.")
+            return
+
+        self._set_chat_buttons_state(True)
+        self._set_chat_status("Lade… (Nummer/Code in Konsole eingeben)")
+
+        def worker() -> None:
+            try:
+                from telethon import TelegramClient
+
+                async def run() -> List[Dict[str, object]]:
+                    async with TelegramClient('tg_session', api_id_int, api_hash) as client:
+                        await client.start()
+                        dialogs = await client.get_dialogs()
+                        rows: List[Dict[str, object]] = []
+                        for dialog in dialogs:
+                            entity = dialog.entity
+                            title = (
+                                getattr(entity, 'title', None)
+                                or getattr(entity, 'first_name', None)
+                                or getattr(entity, 'username', None)
+                                or 'Chat'
+                            )
+                            username = getattr(entity, 'username', None)
+                            if username:
+                                username = str(username).strip()
+                                if username and not username.startswith('@'):
+                                    username = f"@{username}"
+                            rows.append({
+                                'title': str(title).strip() if title else 'Chat',
+                                'username': username if username else None,
+                                'id': getattr(entity, 'id', None)
+                            })
+                        return rows
+
+                new_entries = asyncio.run(run())
+                self.root.after(0, lambda: self._handle_chat_refresh_success(new_entries))
+            except Exception as exc:
+                self.root.after(0, lambda: self._handle_chat_refresh_error(exc))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _handle_chat_refresh_success(self, entries: List[Dict[str, object]]) -> None:
+        self._set_chat_buttons_state(False)
+
+        normalized = [entry for entry in (self._normalize_chat_entry(item) for item in entries) if entry]
+
+        existing_config = self._read_chat_config() or {}
+        selected_entry = None
+        if isinstance(existing_config, dict):
+            selected_entry = self._normalize_chat_entry(existing_config.get('selected_chat'))
+
+        try:
+            self._write_chat_config(normalized, selected_entry)
+        except Exception as exc:
+            self._set_chat_status("Fehler beim Speichern")
+            messagebox.showerror("Chats", f"chat_config.json konnte nicht aktualisiert werden: {exc}")
+            return
+
+        selected_identifier = self._entry_identifier(selected_entry) if selected_entry else None
+        self._set_chat_entries(normalized, selected_identifier)
+
+        count = len(normalized)
+        status_text = f"Fertig ({count} Chats)" if count else "Keine Chats gefunden"
+        self._set_chat_status(status_text)
+
+    def _handle_chat_refresh_error(self, error: Exception) -> None:
+        self._set_chat_buttons_state(False)
+        self._set_chat_status("Fehler beim Laden")
+        messagebox.showerror("Telegram", str(error))
+
+    def _save_selected_chat(self) -> None:
+        if not self.chats_listbox:
+            return
+
+        selection = self.chats_listbox.curselection()
+        if not selection:
+            messagebox.showinfo("Chats", "Bitte einen Chat auswählen.")
+            return
+
+        index = selection[0]
+        if index >= len(self._chat_entries):
+            messagebox.showinfo("Chats", "Die Auswahl ist nicht verfügbar.")
+            return
+
+        entry = self._chat_entries[index]
+        identifier = self._entry_identifier(entry)
+        if not identifier:
+            messagebox.showinfo("Chats", "Der ausgewählte Chat besitzt keine eindeutige Kennung.")
+            return
+
+        try:
+            self._write_chat_config(self._chat_entries, entry)
+        except Exception as exc:
+            messagebox.showerror("Chats", f"chat_config.json konnte nicht aktualisiert werden: {exc}")
+            return
+
+        env_values = self._read_env_file()
+        env_values['TG_TARGET'] = identifier
+
+        try:
+            self._write_env_file(env_values)
+        except Exception as exc:
+            messagebox.showerror("Chats", f".env konnte nicht aktualisiert werden: {exc}")
+            return
+
+        os.environ['TG_TARGET'] = identifier
+        self._set_chat_status(f"Gespeichert: {identifier}")
+        messagebox.showinfo("Chats", f"Gespeichert: {identifier}")
+
+    def _read_env_file(self) -> Dict[str, str]:
+        env_path = '.env'
+        values: Dict[str, str] = {}
+        if not os.path.exists(env_path):
+            return values
+
+        try:
+            with open(env_path, 'r', encoding='utf-8') as env_file:
+                for line in env_file:
+                    if "=" in line:
+                        key, value = line.strip().split("=", 1)
+                        if key:
+                            values[key] = value
+        except Exception:
+            return values
+        return values
+
+    def _write_env_file(self, values: Dict[str, str]) -> None:
+        with open('.env', 'w', encoding='utf-8') as env_file:
+            for key, value in values.items():
+                env_file.write(f"{key}={value}\n")
 
     def _open_bot_settings_from_header(self):
         """Wechselt vom Header direkt zum Bot-Einstellungs-Tab."""
