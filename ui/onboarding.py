@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 from pathlib import Path
@@ -82,7 +81,7 @@ class _StepConnector:
         self.canvas.itemconfig(self.line_id, fill=color)
 
 
-class _Wizard(tk.Toplevel):
+class OnboardingTwoStep(tk.Toplevel):
     def __init__(self, root: tk.Tk) -> None:
         super().__init__(root)
         self.result: Optional[Dict[str, str]] = None
@@ -325,29 +324,53 @@ class _Wizard(tk.Toplevel):
         self.geometry(f"{width}x{height}+{x}+{y}")
 
 
-def run_onboarding(root: tk.Tk) -> Optional[Dict[str, str]]:
-    """Run the onboarding wizard and return configuration values."""
+def run_onboarding(root: tk.Tk | None = None):
+    """
+    Startet das Onboarding als modales Fenster.
+    - Wenn root None ist, wird eine eigene Tk-Mainloop gefahren (robust auf Windows).
+    - Gibt ein dict mit Credentials zurück oder None, wenn abgebrochen.
+    Erwartet, dass OnboardingTwoStep eine Eigenschaft .result setzt (dict/None)
+    und sich selbst zerstört, wenn der Benutzer fertig ist.
+    """
 
-    wizard = _Wizard(root)
-    start = time.time()
-    visible = False
-    while time.time() - start < 5:
-        try:
-            root.update_idletasks()
-            root.update()
-        except tk.TclError:
-            break
-        if wizard.winfo_viewable():
-            visible = True
-            break
-        time.sleep(0.05)
+    own_root = False
+    if root is None:
+        root = tk.Tk()
+        own_root = True
 
-    if not visible:
+    # Toplevel erstellen
+    wiz = OnboardingTwoStep(root)
+
+    # Sichtbarkeit & Modalität erzwingen
+    wiz.update_idletasks()
+    w, h = wiz.winfo_reqwidth(), wiz.winfo_reqheight()
+    sw, sh = wiz.winfo_screenwidth(), wiz.winfo_screenheight()
+    x, y = max(0, (sw - w) // 2), max(0, (sh - h) // 2)
+    wiz.geometry(f"+{x}+{y}")
+    try:
+        wiz.transient(root)
+    except Exception:
+        pass
+    wiz.lift()
+    wiz.attributes("-topmost", True)
+    wiz.after(600, lambda: wiz.attributes("-topmost", False))
+    wiz.deiconify()
+    wiz.grab_set()
+    wiz.focus_force()
+
+    # Entweder eigene Mainloop oder blockierend warten
+    if own_root:
+        # root.mainloop() endet erst, wenn wiz zerstört wurde
+        root.mainloop()
         try:
-            wizard.destroy()
-        except tk.TclError:
+            root.destroy()
+        except Exception:
             pass
-        raise RuntimeError("Onboarding window not visible")
+    else:
+        root.wait_window(wiz)
 
-    root.wait_window(wizard)
-    return wizard.result
+    # Ergebnis vom Wizard
+    try:
+        return getattr(wiz, "result", None)
+    except Exception:
+        return None
