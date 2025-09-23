@@ -4765,7 +4765,6 @@ class SetupAssistant:
         self.window.geometry("760x620")
         self.window.configure(bg="#050B16")
         self.window.resizable(False, False)
-        self.window.grab_set()  # Modal
 
         background = "#050B16"
         surface = "#0B1624"
