@@ -16,7 +16,7 @@ from enum import Enum
 from typing import Optional, Dict, List, Awaitable, Tuple
 
 # >>> numpy/mt5 guard + onboarding bootstrap
-import os, sys, pathlib, traceback
+import os, sys, pathlib, traceback, time, glob
 
 # 1) NumPy-Guard (MT5 braucht NumPy 1.x)
 try:
@@ -73,8 +73,7 @@ def run_onboarding_if_needed():
 
     # Session-Datei auf Wunsch löschen -> zwingt Telethon zur Nummer/Code-Abfrage
     if reset_session:
-        import glob, os
-
+        # KEIN "import os" mehr hier!
         for p in glob.glob("tg_session.session*"):
             try:
                 os.remove(p)
