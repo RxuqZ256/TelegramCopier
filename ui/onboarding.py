@@ -111,6 +111,17 @@ class _Wizard:
 
         self._show_step(0)
 
+        # Sichtbarkeit/Position erzwingen
+        self.window.update_idletasks()
+        w, h = self.window.winfo_reqwidth(), self.window.winfo_reqheight()
+        sw, sh = self.window.winfo_screenwidth(), self.window.winfo_screenheight()
+        x, y = max(0, (sw - w) // 2), max(0, (sh - h) // 2)
+        self.window.geometry(f"+{x}+{y}")
+        self.window.attributes("-topmost", True)
+        self.window.after(400, lambda: self.window.attributes("-topmost", False))
+        self.window.deiconify()
+        self.window.focus_force()
+
     def _create_stepper(self) -> None:
         self.stepper_frame = ttk.Frame(self.content)
         self.stepper_frame.pack(fill="x", pady=(0, 20))
@@ -279,14 +290,20 @@ class _Wizard:
             return
 
         config = {
-            "TG_API_ID": self.api_id_var.get().strip(),
-            "TG_API_HASH": self.api_hash_var.get().strip(),
-            "TG_TARGET": self.target_var.get().strip(),
-            "FORWARD_TO": self.forward_var.get().strip(),
+            "api_id": self.api_id_var.get().strip(),
+            "api_hash": self.api_hash_var.get().strip(),
+            "tg_target": self.target_var.get().strip(),
+            "forward_to": self.forward_var.get().strip(),
         }
 
         try:
-            lines = [f"{key}={value}" for key, value in config.items()]
+            lines = [
+                f"TG_API_ID={config['api_id']}",
+                f"TG_API_HASH={config['api_hash']}",
+                f"TG_TARGET={config['tg_target']}",
+            ]
+            if config["forward_to"]:
+                lines.append(f"FORWARD_TO={config['forward_to']}")
             Path(".env").write_text("\n".join(lines) + "\n", encoding="utf-8")
         except OSError as exc:
             messagebox.showerror("Error", f"Failed to write .env file: {exc}")
