@@ -56,18 +56,30 @@ def _console_onboarding():
 
 def run_onboarding_if_needed():
     print(">>> BOOT args:", sys.argv, flush=True)
-    force = ("--setup" in sys.argv)
+    force_gui_always = ("--always-setup" in sys.argv) or ("--gui-setup" in sys.argv)
     force_console = ("--console-setup" in sys.argv)
-    env_ready = bool(os.getenv("TG_API_ID") and os.getenv("TG_API_HASH") and os.getenv("TG_TARGET"))
-    has_env = os.path.exists(".env")
+
+    if force_gui_always or "--setup" in sys.argv:
+        try:
+            if os.path.exists(".env"):
+                os.remove(".env")
+        except Exception:
+            pass
+        for k in ("TG_API_ID", "TG_API_HASH", "TG_TARGET", "FORWARD_TO"):
+            os.environ.pop(k, None)
 
     if os.name != "nt":
         print("[onboarding] non-Windows -> skip"); return
+
+    if not (force_gui_always or force_console or "--setup" in sys.argv):
+        env_ready = bool(os.getenv("TG_API_ID") and os.getenv("TG_API_HASH") and os.getenv("TG_TARGET"))
+        has_env = os.path.exists(".env")
+        if env_ready and has_env:
+            print("[onboarding] env already set + .env present -> skip"); return
+
     if force_console:
         print("[onboarding] forcing console setup...", flush=True)
         _console_onboarding(); return
-    if not force and env_ready and has_env:
-        print("[onboarding] env already set + .env present -> skip"); return
 
     # GUI versuchen – mit hartem Timeout + Fallback
     try:
