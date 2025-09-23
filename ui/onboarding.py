@@ -1,9 +1,9 @@
-import asyncio
 import os
-import threading
+import threading, asyncio
 import tkinter as tk
 from typing import Dict
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
+from telethon.errors import SessionPasswordNeededError
 
 DARK_BG = "#0f1217"
 CARD_BG = "#151a22"
@@ -102,33 +102,81 @@ class OnboardingWindow(tk.Tk):
             return
 
         self.btn.state(["disabled"])
-        self.status.config(text="Login in Konsole…")
+        self.status.config(text="Anmeldung…")
 
-        def worker(aid: str, ahash: str) -> None:
+        def worker(api_id, api_hash):
+            """
+            Führt den Telethon-Login vollständig OHNE Konsole aus.
+            Fragt Telefonnummer / Code / 2FA via Tk-Popups ab.
+            """
             try:
                 from telethon import TelegramClient
+                async def run():
+                    async with TelegramClient("tg_session", int(api_id), api_hash) as client:
+                        # 1) Verbinden
+                        await client.connect()
+                        if not await client.is_user_authorized():
+                            # 2) Telefonnummer via Popup
+                            def ask_phone():
+                                return simpledialog.askstring(
+                                    "Telegram Login",
+                                    "Telefonnummer inkl. Ländervorwahl (z. B. +49…):",
+                                    parent=self
+                                )
+                            phone = None
+                            while not phone:
+                                phone = self.after(0, None) or ask_phone()
+                                if phone is None:
+                                    raise RuntimeError("Login abgebrochen (Telefonnummer).")
 
-                async def run() -> None:
-                    async with TelegramClient("tg_session", int(aid), ahash) as client:
-                        await client.start()
+                            # 3) Code anfordern
+                            await client.send_code_request(phone)
 
+                            # 4) Code via Popup
+                            def ask_code():
+                                return simpledialog.askstring(
+                                    "Bestätigungscode",
+                                    "Code aus Telegram eingeben:",
+                                    parent=self
+                                )
+                            code = ask_code()
+                            if code is None:
+                                raise RuntimeError("Login abgebrochen (Code).")
+
+                            # 5) Sign-in (ggf. 2FA)
+                            try:
+                                await client.sign_in(phone=phone, code=code)
+                            except SessionPasswordNeededError:
+                                def ask_pwd():
+                                    return simpledialog.askstring(
+                                        "Zwei-Faktor-Passwort",
+                                        "Bitte 2FA-Passwort eingeben:",
+                                        parent=self, show="•"
+                                    )
+                                pwd = ask_pwd()
+                                if pwd is None:
+                                    raise RuntimeError("Login abgebrochen (2FA-Passwort).")
+                                await client.sign_in(password=pwd)
+
+                        # Wenn wir hier sind: Erfolgreich autorisiert
                 asyncio.run(run())
 
-                def done() -> None:
-                    self._write_env(aid, ahash)
-                    os.environ["TG_API_ID"] = str(aid)
-                    os.environ["TG_API_HASH"] = ahash
-                    self.result = {"api_id": int(aid), "api_hash": ahash}
+                # Erfolg -> .env schreiben und Fenster schließen
+                def done():
+                    with open(".env","w",encoding="utf-8") as f:
+                        f.write(f"TG_API_ID={api_id}\nTG_API_HASH={api_hash}\n")
+                    os.environ["TG_API_ID"]=str(api_id)
+                    os.environ["TG_API_HASH"]=api_hash
+                    self.result={"api_id":int(api_id),"api_hash":api_hash}
                     self.destroy()
-
                 self.after(0, done)
-            except Exception as exc:
-                def handle_error() -> None:
-                    self.btn.state(["!disabled"])
-                    self.status.config(text="")
-                    messagebox.showerror("Telegram", str(exc))
 
-                self.after(0, handle_error)
+            except Exception as e:
+                self.after(0, lambda: (
+                    self.btn.state(["!disabled"]),
+                    self.status.config(text=""),
+                    messagebox.showerror("Telegram Login", str(e))
+                ))
 
         threading.Thread(target=worker, args=(api_id, api_hash), daemon=True).start()
 
