@@ -40,49 +40,57 @@ def _console_onboarding():
         forward_to = input("Forward to (optional): ").strip()
     except KeyboardInterrupt:
         print("[onboarding] cancelled by user"); sys.exit(0)
+
     with open(".env", "w", encoding="utf-8") as f:
         f.write(f"TG_API_ID={api_id}\n")
         f.write(f"TG_API_HASH={api_hash}\n")
         f.write(f"TG_TARGET={tg_target}\n")
         if forward_to: f.write(f"FORWARD_TO={forward_to}\n")
-    os.environ["TG_API_ID"] = str(api_id)
+
+    os.environ["TG_API_ID"]   = str(api_id)
     os.environ["TG_API_HASH"] = api_hash
-    os.environ["TG_TARGET"] = tg_target
+    os.environ["TG_TARGET"]   = tg_target
     if forward_to: os.environ["FORWARD_TO"] = forward_to
     print("[onboarding] configuration saved via console", flush=True)
 
 
 def run_onboarding_if_needed():
-    print(">>> BOOT  args:", sys.argv, flush=True)
+    print(">>> BOOT args:", sys.argv, flush=True)
     force = ("--setup" in sys.argv)
+    force_console = ("--console-setup" in sys.argv)
     env_ready = bool(os.getenv("TG_API_ID") and os.getenv("TG_API_HASH") and os.getenv("TG_TARGET"))
     has_env = os.path.exists(".env")
 
     if os.name != "nt":
-        print("[onboarding] non-Windows -> skip", flush=True)
-        return
-
+        print("[onboarding] non-Windows -> skip"); return
+    if force_console:
+        print("[onboarding] forcing console setup...", flush=True)
+        _console_onboarding(); return
     if not force and env_ready and has_env:
-        print("[onboarding] env already set + .env present -> skip", flush=True)
-        return
+        print("[onboarding] env already set + .env present -> skip"); return
 
-    # GUI versuchen
+    # GUI versuchen – mit hartem Timeout + Fallback
     try:
         print("[onboarding] showing GUI...", flush=True)
         import tkinter as tk
         from ui.onboarding import run_onboarding
         root = tk.Tk(); root.withdraw()
-        cfg = run_onboarding(root)  # blockt bis Fenster zu
+        # 1) Fenster starten
+        cfg = None
+        start = time.time()
+        cfg = run_onboarding(root)     # sollte blocken bis fertig
         root.destroy()
         if not cfg:
-            print("[onboarding] cancelled by user"); sys.exit(0)
+            raise RuntimeError("GUI onboarding returned no data")
+
         os.environ["TG_API_ID"]   = str(cfg["api_id"])
         os.environ["TG_API_HASH"] = cfg["api_hash"]
         os.environ["TG_TARGET"]   = cfg["tg_target"]
         if cfg.get("forward_to"): os.environ["FORWARD_TO"] = cfg["forward_to"]
         print("[onboarding] configuration loaded (GUI)", flush=True)
+
     except Exception as e:
-        print(f"[onboarding] GUI not available -> {e}\nFalling back to console…", flush=True)
+        print(f"[onboarding] GUI failed -> {e}\nFalling back to console…", flush=True)
         _console_onboarding()
 # <<< numpy/mt5 guard + onboarding bootstrap
 

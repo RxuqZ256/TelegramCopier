@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 from pathlib import Path
@@ -117,10 +118,9 @@ class _Wizard(tk.Toplevel):
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         x, y = max(0, (sw - w)//2), max(0, (sh - h)//2)
         self.geometry(f"+{x}+{y}")
-        self.attributes("-topmost", True)
-        self.after(400, lambda: self.attributes("-topmost", False))
-        self.deiconify()
-        self.focus_force()
+        self.lift(); self.attributes("-topmost", True)
+        self.after(500, lambda: self.attributes("-topmost", False))
+        self.deiconify(); self.focus_force()
 
     def _create_stepper(self) -> None:
         self.stepper_frame = ttk.Frame(self.content)
@@ -329,5 +329,25 @@ def run_onboarding(root: tk.Tk) -> Optional[Dict[str, str]]:
     """Run the onboarding wizard and return configuration values."""
 
     wizard = _Wizard(root)
+    start = time.time()
+    visible = False
+    while time.time() - start < 5:
+        try:
+            root.update_idletasks()
+            root.update()
+        except tk.TclError:
+            break
+        if wizard.winfo_viewable():
+            visible = True
+            break
+        time.sleep(0.05)
+
+    if not visible:
+        try:
+            wizard.destroy()
+        except tk.TclError:
+            pass
+        raise RuntimeError("Onboarding window not visible")
+
     root.wait_window(wizard)
     return wizard.result
