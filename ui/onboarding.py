@@ -81,19 +81,19 @@ class _StepConnector:
         self.canvas.itemconfig(self.line_id, fill=color)
 
 
-class _Wizard:
+class _Wizard(tk.Toplevel):
     def __init__(self, root: tk.Tk) -> None:
+        super().__init__(root)
         self.result: Optional[Dict[str, str]] = None
 
-        self.window = tk.Toplevel(root)
-        self.window.title("Telegram Copier Onboarding")
-        self.window.configure(bg=BACKGROUND_COLOR)
-        self.window.resizable(False, False)
-        self.window.transient(root)
-        self.window.grab_set()
-        self.window.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.title("Telegram Copier Onboarding")
+        self.configure(bg=BACKGROUND_COLOR)
+        self.resizable(False, False)
+        self.transient(root)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
 
-        style = ttk.Style(self.window)
+        style = ttk.Style(self)
         try:
             style.theme_use("clam")
         except tk.TclError:
@@ -103,7 +103,7 @@ class _Wizard:
         style.configure("TButton", font=("Segoe UI", 10))
         style.configure("Accent.TButton", font=("Segoe UI", 10, "bold"))
 
-        self.content = ttk.Frame(self.window, padding=20)
+        self.content = ttk.Frame(self, padding=20)
         self.content.pack(fill="both", expand=True)
 
         self._create_stepper()
@@ -112,15 +112,15 @@ class _Wizard:
         self._show_step(0)
 
         # Sichtbarkeit/Position erzwingen
-        self.window.update_idletasks()
-        w, h = self.window.winfo_reqwidth(), self.window.winfo_reqheight()
-        sw, sh = self.window.winfo_screenwidth(), self.window.winfo_screenheight()
-        x, y = max(0, (sw - w) // 2), max(0, (sh - h) // 2)
-        self.window.geometry(f"+{x}+{y}")
-        self.window.attributes("-topmost", True)
-        self.window.after(400, lambda: self.window.attributes("-topmost", False))
-        self.window.deiconify()
-        self.window.focus_force()
+        self.update_idletasks()
+        w, h = self.winfo_reqwidth(), self.winfo_reqheight()
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        x, y = max(0, (sw - w)//2), max(0, (sh - h)//2)
+        self.geometry(f"+{x}+{y}")
+        self.attributes("-topmost", True)
+        self.after(400, lambda: self.attributes("-topmost", False))
+        self.deiconify()
+        self.focus_force()
 
     def _create_stepper(self) -> None:
         self.stepper_frame = ttk.Frame(self.content)
@@ -245,12 +245,12 @@ class _Wizard:
         self.connector.set_state(active=index > 0)
 
         if index == 0:
-            self.window.geometry("")
+            self.geometry("")
             self.api_id_entry.focus_set()
         else:
-            self.window.geometry("")
+            self.geometry("")
             self.target_entry.focus_set()
-        self.window.update_idletasks()
+        self.update_idletasks()
         self._center_window()
         self._update_step1_state()
         self._update_step2_state()
@@ -282,8 +282,8 @@ class _Wizard:
 
     def _cancel(self) -> None:
         self.result = None
-        self.window.grab_release()
-        self.window.destroy()
+        self.grab_release()
+        self.destroy()
 
     def _finish(self) -> None:
         if not (self._is_step1_valid() and self._is_step2_valid()):
@@ -310,24 +310,24 @@ class _Wizard:
             return
 
         self.result = config
-        self.window.grab_release()
-        self.window.destroy()
+        self.grab_release()
+        self.destroy()
 
     def _center_window(self) -> None:
-        self.window.update_idletasks()
-        width = self.window.winfo_width()
-        height = self.window.winfo_height()
-        screen_width = self.window.winfo_screenwidth()
-        screen_height = self.window.winfo_screenheight()
+        self.update_idletasks()
+        width = self.winfo_width()
+        height = self.winfo_height()
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
 
         x = max((screen_width // 2) - (width // 2), 0)
         y = max((screen_height // 2) - (height // 2), 0)
-        self.window.geometry(f"{width}x{height}+{x}+{y}")
+        self.geometry(f"{width}x{height}+{x}+{y}")
 
 
 def run_onboarding(root: tk.Tk) -> Optional[Dict[str, str]]:
     """Run the onboarding wizard and return configuration values."""
 
     wizard = _Wizard(root)
-    root.wait_window(wizard.window)
+    root.wait_window(wizard)
     return wizard.result

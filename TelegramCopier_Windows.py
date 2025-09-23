@@ -76,9 +76,9 @@ def run_onboarding_if_needed():
         root.destroy()
         if not cfg:
             print("[onboarding] cancelled by user"); sys.exit(0)
-        os.environ["TG_API_ID"] = str(cfg["api_id"])
+        os.environ["TG_API_ID"]   = str(cfg["api_id"])
         os.environ["TG_API_HASH"] = cfg["api_hash"]
-        os.environ["TG_TARGET"] = cfg["tg_target"]
+        os.environ["TG_TARGET"]   = cfg["tg_target"]
         if cfg.get("forward_to"): os.environ["FORWARD_TO"] = cfg["forward_to"]
         print("[onboarding] configuration loaded (GUI)", flush=True)
     except Exception as e:
@@ -89,7 +89,7 @@ def run_onboarding_if_needed():
 # >>> UI bootstrap
 def _start_ui():
     from ui.app import run_app
-    session_info = {"tg_target": os.getenv("TG_TARGET", ""), "user": "local"}
+    session_info = {"tg_target": os.getenv("TG_TARGET",""), "user": "local"}
     print("[ui] launching main window…", flush=True)
     run_app(session=session_info, initial_page="settings")
 # <<< UI bootstrap
