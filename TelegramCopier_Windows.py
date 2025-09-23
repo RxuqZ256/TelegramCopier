@@ -69,6 +69,18 @@ def _console_onboarding():
 
 def run_onboarding_if_needed():
     print(">>> BOOT args:", sys.argv, flush=True)
+    reset_session = ("--reset-session" in sys.argv)
+
+    # Session-Datei auf Wunsch löschen -> zwingt Telethon zur Nummer/Code-Abfrage
+    if reset_session:
+        import glob, os
+
+        for p in glob.glob("tg_session.session*"):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        print("[onboarding] telegram session reset -> phone/code will be asked", flush=True)
     force_gui_always = ("--always-setup" in sys.argv) or ("--gui-setup" in sys.argv)
     force_console    = ("--console-setup" in sys.argv)
     if force_gui_always or "--setup" in sys.argv:
@@ -115,6 +127,65 @@ def _start_ui():
     print("[ui] launching main window…", flush=True)
     run_app(session=session_info, initial_page="settings")
 # <<< UI bootstrap
+
+
+def safe_load_chat_config() -> Tuple[Optional[Dict[str, object]], List[Dict[str, object]]]:
+    """Load chat_config.json defensively and normalise the known chats list."""
+
+    try:
+        if not os.path.exists("chat_config.json"):
+            return None, []
+
+        with open("chat_config.json", "r", encoding="utf-8") as file:
+            data = json.load(file)
+
+        payload: Optional[Dict[str, object]] = data if isinstance(data, dict) else None
+        source_entries: List[Dict[str, object]] = []
+
+        if isinstance(data, dict):
+            known_chats = data.get("known_chats")
+            if isinstance(known_chats, list):
+                source_entries.extend(item for item in known_chats if isinstance(item, dict))
+            else:
+                for key, value in data.items():
+                    if key == "selected_chat":
+                        continue
+                    if isinstance(value, dict):
+                        source_entries.append(value)
+        elif isinstance(data, list):
+            source_entries.extend(item for item in data if isinstance(item, dict))
+        else:
+            raise ValueError("chat_config.json hat ein unbekanntes Format")
+
+        normalised: List[Dict[str, object]] = []
+        for entry in source_entries:
+            title = (
+                entry.get("title")
+                or entry.get("chat_name")
+                or entry.get("name")
+                or entry.get("first_name")
+                or "Chat"
+            )
+            username = entry.get("username")
+            chat_id = entry.get("id")
+            if chat_id is None:
+                chat_id = entry.get("chat_id")
+            normalised.append(
+                {
+                    "title": str(title).strip() if title else "Chat",
+                    "username": username,
+                    "id": chat_id,
+                }
+            )
+
+        return payload, normalised
+    except Exception as exc:
+        print("Fehler beim Laden der Chat-Konfiguration:", exc)
+        try:
+            os.replace("chat_config.json", "chat_config.broken.json")
+        except OSError:
+            pass
+        return None, []
 
 # ---- optionale Abhängigkeit: MetaTrader5 (nur für Windows verfügbar) ----
 try:
@@ -2349,16 +2420,21 @@ class TradingGUI:
         if not self.chats_listbox:
             return
 
-        config_data = self._read_chat_config()
+        config_data, raw_entries = safe_load_chat_config()
         selected_identifier = None
 
         if isinstance(config_data, dict):
             selected_entry = self._normalize_chat_entry(config_data.get('selected_chat'))
             if selected_entry:
                 selected_identifier = self._entry_identifier(selected_entry)
+
+        entries: List[Dict[str, object]] = []
+        if raw_entries:
+            entries = [
+                entry for entry in (self._normalize_chat_entry(item) for item in raw_entries) if entry
+            ]
+        elif isinstance(config_data, dict):
             entries = self._normalize_chat_entries(config_data)
-        else:
-            entries = []
 
         self._set_chat_entries(entries, selected_identifier)
 
@@ -2369,17 +2445,8 @@ class TradingGUI:
 
     def _read_chat_config(self) -> Optional[Dict]:
         """chat_config.json einlesen."""
-        if not os.path.exists('chat_config.json'):
-            return None
-
-        try:
-            with open('chat_config.json', 'r', encoding='utf-8') as file:
-                data = json.load(file)
-            if isinstance(data, dict):
-                return data
-        except Exception:
-            pass
-        return None
+        data, _ = safe_load_chat_config()
+        return data
 
     def _write_chat_config(
         self,
